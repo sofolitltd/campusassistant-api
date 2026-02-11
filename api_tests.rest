@@ -1,0 +1,124 @@
+@baseUrl = http://localhost:8080/api/v1
+
+### 1. Universities
+# @name createUniversity
+POST {{baseUrl}}/universities
+Content-Type: application/json
+
+{
+    "name": "University of Chittagong",
+    "acronym": "CU",
+    "address": "Chittagong, Bangladesh",
+    "website": "https://cu.ac.bd"
+}
+
+### Get All Universities
+GET {{baseUrl}}/universities
+
+### Get University by ID
+@universityId = {{createUniversity.response.body.id}}
+GET {{baseUrl}}/universities/{{universityId}}
+
+### 2. Departments
+# @name createDepartment
+POST {{baseUrl}}/departments
+Content-Type: application/json
+
+{
+    "name": "Computer Science and Engineering",
+    "code": "CSE",
+    "university_id": "{{universityId}}",
+    "semesters": 8
+}
+
+### Get All Departments
+GET {{baseUrl}}/departments
+
+### Get Departments filtered by University
+GET {{baseUrl}}/departments?university_id={{universityId}}
+
+### 3. Sessions
+# @name createSession
+POST {{baseUrl}}/sessions
+Content-Type: application/json
+
+{
+    "name": "2023-24",
+    "university_id": "{{universityId}}",
+    "is_active": true
+}
+
+### 4. Batches
+@departmentId = {{createDepartment.response.body.id}}
+@sessionId = {{createSession.response.body.id}}
+
+# @name createBatch
+POST {{baseUrl}}/batches
+Content-Type: application/json
+
+{
+    "name": "CSE 25th Batch",
+    "department_id": "{{departmentId}}",
+    "session_id": "{{sessionId}}"
+}
+
+### 5. Users
+# @name createUser
+POST {{baseUrl}}/users
+Content-Type: application/json
+
+{
+    "email": "student@example.com",
+    "first_name": "John",
+    "last_name": "Doe",
+    "role": "student"
+}
+
+### 6. Students
+@userId = {{createUser.response.body.id}}
+@batchId = {{createBatch.response.body.id}}
+
+POST {{baseUrl}}/students
+Content-Type: application/json
+
+{
+    "user_id": "{{userId}}",
+    "batch_id": "{{batchId}}",
+    "roll_number": "19701001",
+    "reg_number": "2019-123456"
+}
+
+### 7. Academic Resources (Notes/Books/Questions)
+# @name createNote
+POST {{baseUrl}}/notes
+Content-Type: application/json
+
+{
+    "title": "Data Structures - Lecture 1",
+    "subject": "CSE-101",
+    "topic": "Linked Lists",
+    "department_id": "{{departmentId}}",
+    "university_id": "{{universityId}}",
+    "download_url": "https://storage.example.com/notes/ds-l1.pdf"
+}
+
+### Filter Notes by Department and University
+GET {{baseUrl}}/notes?university_id={{universityId}}&department_id={{departmentId}}
+
+### Filter Books
+GET {{baseUrl}}/books?university_id={{universityId}}
+
+### 8. Transport
+POST {{baseUrl}}/transports
+Content-Type: application/json
+
+{
+    "university_id": "{{universityId}}",
+    "route_name": "Campus - City Gate",
+    "bus_number": "Bus 05",
+    "schedule": "Departs at 8:00 AM",
+    "driver_contact": "0123456789"
+}
+
+### Filter Transport
+GET {{baseUrl}}/transports?university_id={{universityId}}

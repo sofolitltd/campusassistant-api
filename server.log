@@ -1,0 +1,301 @@
+2026-02-12T01:46:41.514+0600	[34mINFO[0m	logger/logger.go:31	Starting Campus Assistant API in development mode
+
+2026/02/12 01:46:42 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36 [33mSLOW SQL >= 200ms
+[0m[31;1m[208.192ms] [33m[rows:1][35m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'universities' AND table_type = 'BASE TABLE'[0m
+
+2026/02/12 01:46:42 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[81.815ms] [34;1m[rows:0][0m CREATE TABLE "universities" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"name" varchar(255) NOT NULL,"acronym" varchar(20),"address" text,"website" varchar(255),"logo_url" text,PRIMARY KEY ("id"),CONSTRAINT "uni_universities_name" UNIQUE ("name"))
+
+2026/02/12 01:46:42 [32m
+[0m[33m[74.467ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_universities_acronym" ON "universities" ("acronym")
+
+2026/02/12 01:46:42 [32m
+[0m[33m[68.685ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_universities_deleted_at" ON "universities" ("deleted_at")
+
+2026/02/12 01:46:42 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[71.573ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'departments' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:42 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[75.712ms] [34;1m[rows:0][0m CREATE TABLE "departments" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"name" varchar(255) NOT NULL,"code" varchar(20),"university_id" uuid NOT NULL,"semesters" bigint,PRIMARY KEY ("id"),CONSTRAINT "fk_universities_departments" FOREIGN KEY ("university_id") REFERENCES "universities"("id"))
+
+2026/02/12 01:46:42 [32m
+[0m[33m[71.878ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_departments_university_id" ON "departments" ("university_id")
+
+2026/02/12 01:46:42 [32m
+[0m[33m[71.452ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_departments_deleted_at" ON "departments" ("deleted_at")
+
+2026/02/12 01:46:42 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[69.833ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'sessions' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:42 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[74.757ms] [34;1m[rows:0][0m CREATE TABLE "sessions" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"name" varchar(50) NOT NULL,"university_id" uuid NOT NULL,"is_active" boolean DEFAULT true,PRIMARY KEY ("id"),CONSTRAINT "fk_universities_sessions" FOREIGN KEY ("university_id") REFERENCES "universities"("id"))
+
+2026/02/12 01:46:42 [32m
+[0m[33m[71.303ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_sessions_university_id" ON "sessions" ("university_id")
+
+2026/02/12 01:46:43 [32m
+[0m[33m[67.834ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_sessions_deleted_at" ON "sessions" ("deleted_at")
+
+2026/02/12 01:46:43 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[80.448ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'batches' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:43 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[79.635ms] [34;1m[rows:0][0m CREATE TABLE "batches" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"name" varchar(100) NOT NULL,"department_id" uuid NOT NULL,"session_id" uuid NOT NULL,PRIMARY KEY ("id"),CONSTRAINT "fk_batches_session" FOREIGN KEY ("session_id") REFERENCES "sessions"("id"),CONSTRAINT "fk_departments_batches" FOREIGN KEY ("department_id") REFERENCES "departments"("id"))
+
+2026/02/12 01:46:43 [32m
+[0m[33m[79.442ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_batches_session_id" ON "batches" ("session_id")
+
+2026/02/12 01:46:43 [32m
+[0m[33m[72.113ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_batches_department_id" ON "batches" ("department_id")
+
+2026/02/12 01:46:43 [32m
+[0m[33m[73.061ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_batches_deleted_at" ON "batches" ("deleted_at")
+
+2026/02/12 01:46:43 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[67.719ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'users' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:43 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[78.158ms] [34;1m[rows:0][0m CREATE TABLE "users" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"email" text NOT NULL,"password_hash" text NOT NULL,"role" varchar(20) DEFAULT 'student',"first_name" varchar(100),"last_name" varchar(100),"phone" varchar(20),"avatar_url" text,"is_active" boolean DEFAULT true,"is_verified" boolean DEFAULT false,"university_id" uuid,"department_id" uuid,PRIMARY KEY ("id"))
+
+2026/02/12 01:46:43 [32m
+[0m[33m[78.157ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_users_department_id" ON "users" ("department_id")
+
+2026/02/12 01:46:43 [32m
+[0m[33m[75.114ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_users_university_id" ON "users" ("university_id")
+
+2026/02/12 01:46:43 [32m
+[0m[33m[70.412ms] [34;1m[rows:0][0m CREATE UNIQUE INDEX IF NOT EXISTS "idx_users_email" ON "users" ("email")
+
+2026/02/12 01:46:43 [32m
+[0m[33m[67.894ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_users_deleted_at" ON "users" ("deleted_at")
+
+2026/02/12 01:46:43 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[74.531ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'students' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:43 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[81.367ms] [34;1m[rows:0][0m CREATE TABLE "students" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"user_id" uuid NOT NULL,"batch_id" uuid NOT NULL,"roll_number" varchar(50),"reg_number" varchar(50),"is_cr" boolean DEFAULT false,PRIMARY KEY ("id"),CONSTRAINT "fk_students_user" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE,CONSTRAINT "fk_batches_students" FOREIGN KEY ("batch_id") REFERENCES "batches"("id"))
+
+2026/02/12 01:46:44 [32m
+[0m[33m[91.495ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_students_reg_number" ON "students" ("reg_number")
+
+2026/02/12 01:46:44 [32m
+[0m[33m[73.414ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_students_roll_number" ON "students" ("roll_number")
+
+2026/02/12 01:46:44 [32m
+[0m[33m[70.276ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_students_batch_id" ON "students" ("batch_id")
+
+2026/02/12 01:46:44 [32m
+[0m[33m[78.997ms] [34;1m[rows:0][0m CREATE UNIQUE INDEX IF NOT EXISTS "idx_students_user_id" ON "students" ("user_id")
+
+2026/02/12 01:46:44 [32m
+[0m[33m[58.483ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_students_deleted_at" ON "students" ("deleted_at")
+
+2026/02/12 01:46:44 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[66.660ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'teachers' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:44 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[85.396ms] [34;1m[rows:0][0m CREATE TABLE "teachers" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"user_id" uuid NOT NULL,"department_id" uuid NOT NULL,"designation" varchar(100),PRIMARY KEY ("id"),CONSTRAINT "fk_teachers_user" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE)
+
+2026/02/12 01:46:44 [32m
+[0m[33m[146.625ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_teachers_department_id" ON "teachers" ("department_id")
+
+2026/02/12 01:46:44 [32m
+[0m[33m[67.189ms] [34;1m[rows:0][0m CREATE UNIQUE INDEX IF NOT EXISTS "idx_teachers_user_id" ON "teachers" ("user_id")
+
+2026/02/12 01:46:44 [32m
+[0m[33m[88.250ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_teachers_deleted_at" ON "teachers" ("deleted_at")
+
+2026/02/12 01:46:44 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[80.161ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'staffs' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:44 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[77.384ms] [34;1m[rows:0][0m CREATE TABLE "staffs" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"user_id" uuid NOT NULL,"university_id" uuid NOT NULL,"position" varchar(100),PRIMARY KEY ("id"),CONSTRAINT "fk_staffs_user" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE)
+
+2026/02/12 01:46:45 [32m
+[0m[33m[58.505ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_staffs_university_id" ON "staffs" ("university_id")
+
+2026/02/12 01:46:45 [32m
+[0m[33m[75.083ms] [34;1m[rows:0][0m CREATE UNIQUE INDEX IF NOT EXISTS "idx_staffs_user_id" ON "staffs" ("user_id")
+
+2026/02/12 01:46:45 [32m
+[0m[33m[96.466ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_staffs_deleted_at" ON "staffs" ("deleted_at")
+
+2026/02/12 01:46:45 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[81.333ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'verifications' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:45 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[71.660ms] [34;1m[rows:0][0m CREATE TABLE "verifications" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"user_id" uuid NOT NULL,"status" text DEFAULT 'pending',"document_url" text,PRIMARY KEY ("id"))
+
+2026/02/12 01:46:45 [32m
+[0m[33m[75.777ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_verifications_user_id" ON "verifications" ("user_id")
+
+2026/02/12 01:46:45 [32m
+[0m[33m[70.726ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_verifications_deleted_at" ON "verifications" ("deleted_at")
+
+2026/02/12 01:46:45 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[61.729ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'books' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:45 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[74.158ms] [34;1m[rows:0][0m CREATE TABLE "books" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"title" varchar(255) NOT NULL,"author" varchar(255),"edition" text,"department_id" uuid,"university_id" uuid,"download_url" text,"physical_loc" text,PRIMARY KEY ("id"))
+
+2026/02/12 01:46:45 [32m
+[0m[33m[71.467ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_books_university_id" ON "books" ("university_id")
+
+2026/02/12 01:46:45 [32m
+[0m[33m[79.689ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_books_department_id" ON "books" ("department_id")
+
+2026/02/12 01:46:45 [32m
+[0m[33m[67.787ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_books_deleted_at" ON "books" ("deleted_at")
+
+2026/02/12 01:46:45 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[71.596ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:46 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[76.491ms] [34;1m[rows:0][0m CREATE TABLE "questions" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"subject" varchar(255) NOT NULL,"year" bigint,"semester" text,"department_id" uuid,"university_id" uuid,"download_url" text,PRIMARY KEY ("id"))
+
+2026/02/12 01:46:46 [32m
+[0m[33m[84.145ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_questions_university_id" ON "questions" ("university_id")
+
+2026/02/12 01:46:46 [32m
+[0m[33m[71.263ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_questions_department_id" ON "questions" ("department_id")
+
+2026/02/12 01:46:46 [32m
+[0m[33m[76.985ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_questions_deleted_at" ON "questions" ("deleted_at")
+
+2026/02/12 01:46:46 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[78.888ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'notes' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:46 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[75.875ms] [34;1m[rows:0][0m CREATE TABLE "notes" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"title" varchar(255) NOT NULL,"subject" text,"topic" text,"teacher_id" uuid,"department_id" uuid,"university_id" uuid,"download_url" text,PRIMARY KEY ("id"))
+
+2026/02/12 01:46:46 [32m
+[0m[33m[57.668ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_notes_university_id" ON "notes" ("university_id")
+
+2026/02/12 01:46:46 [32m
+[0m[33m[81.670ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_notes_department_id" ON "notes" ("department_id")
+
+2026/02/12 01:46:46 [32m
+[0m[33m[103.803ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_notes_teacher_id" ON "notes" ("teacher_id")
+
+2026/02/12 01:46:46 [32m
+[0m[33m[76.419ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_notes_deleted_at" ON "notes" ("deleted_at")
+
+2026/02/12 01:46:46 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[67.035ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'syllabuses' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:46 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[84.104ms] [34;1m[rows:0][0m CREATE TABLE "syllabuses" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"session_id" uuid,"department_id" uuid,"university_id" uuid,"download_url" text,PRIMARY KEY ("id"))
+
+2026/02/12 01:46:46 [32m
+[0m[33m[68.380ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_syllabuses_university_id" ON "syllabuses" ("university_id")
+
+2026/02/12 01:46:47 [32m
+[0m[33m[67.734ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_syllabuses_department_id" ON "syllabuses" ("department_id")
+
+2026/02/12 01:46:47 [32m
+[0m[33m[74.174ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_syllabuses_session_id" ON "syllabuses" ("session_id")
+
+2026/02/12 01:46:47 [32m
+[0m[33m[73.953ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_syllabuses_deleted_at" ON "syllabuses" ("deleted_at")
+
+2026/02/12 01:46:47 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[81.391ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'transports' AND table_type = 'BASE TABLE'
+
+2026/02/12 01:46:47 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/connection.go:36
+[0m[33m[78.332ms] [34;1m[rows:0][0m CREATE TABLE "transports" ("id" uuid,"created_at" timestamptz,"updated_at" timestamptz,"deleted_at" timestamptz,"university_id" uuid NOT NULL,"route_name" varchar(100) NOT NULL,"bus_number" text,"schedule" text,"driver_contact" text,PRIMARY KEY ("id"))
+
+2026/02/12 01:46:47 [32m
+[0m[33m[80.057ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_transports_university_id" ON "transports" ("university_id")
+
+2026/02/12 01:46:47 [32m
+[0m[33m[70.665ms] [34;1m[rows:0][0m CREATE INDEX IF NOT EXISTS "idx_transports_deleted_at" ON "transports" ("deleted_at")
+2026/02/12 01:46:47 Connected to PostgreSQL successfully
+[GIN-debug] [WARNING] Creating an Engine instance with the Logger and Recovery middleware already attached.
+
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] POST   /api/v1/universities      --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/universities      --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/universities/:id  --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/universities/:id  --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/universities/:id  --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/departments       --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/departments       --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/departments/:id   --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/departments/:id   --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/departments/:id   --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/sessions          --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/sessions          --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/sessions/:id      --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/sessions/:id      --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/sessions/:id      --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/batches           --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/batches           --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/batches/:id       --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/batches/:id       --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/batches/:id       --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/users             --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/users             --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/users/:id         --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/users/:id         --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/users/:id         --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/students          --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/students          --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/students/:id      --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/students/:id      --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/students/:id      --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/teachers          --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/teachers          --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/teachers/:id      --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/teachers/:id      --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/teachers/:id      --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/staffs            --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/staffs            --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/staffs/:id        --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/staffs/:id        --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/staffs/:id        --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/verifications     --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/verifications     --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/verifications/:id --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/verifications/:id --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/verifications/:id --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/books             --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/books             --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/books/:id         --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/books/:id         --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/books/:id         --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/questions         --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/questions         --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/questions/:id     --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/questions/:id     --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/questions/:id     --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/notes             --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/notes             --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/notes/:id         --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/notes/:id         --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/notes/:id         --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/syllabuses        --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/syllabuses        --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/syllabuses/:id    --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/syllabuses/:id    --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/syllabuses/:id    --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+[GIN-debug] POST   /api/v1/transports        --> campusassistant-api/internal/delivery/http.registerRoutes[...].func1 (5 handlers)
+[GIN-debug] GET    /api/v1/transports        --> campusassistant-api/internal/delivery/http.registerRoutes[...].func2 (5 handlers)
+[GIN-debug] GET    /api/v1/transports/:id    --> campusassistant-api/internal/delivery/http.registerRoutes[...].func3 (5 handlers)
+[GIN-debug] PUT    /api/v1/transports/:id    --> campusassistant-api/internal/delivery/http.registerRoutes[...].func4 (5 handlers)
+[GIN-debug] DELETE /api/v1/transports/:id    --> campusassistant-api/internal/delivery/http.registerRoutes[...].func5 (5 handlers)
+2026-02-12T01:46:47.469+0600	[34mINFO[0m	logger/logger.go:31	Server listening on :8080
+[GIN-debug] [WARNING] You trusted all proxies, this is NOT safe. We recommend you to set a value.
+Please check https://github.com/gin-gonic/gin/blob/master/docs/doc.md#dont-trust-all-proxies for details.
+[GIN-debug] Listening and serving HTTP on :8080
+
+2026/02/12 01:47:04 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/repository.go:39 [33mSLOW SQL >= 200ms
+[0m[31;1m[230.971ms] [33m[rows:1][35m SELECT count(*) FROM "universities" WHERE "universities"."deleted_at" IS NULL[0m
+
+2026/02/12 01:47:05 [32m/Users/reyad/Documents/Programming/Go/campusassistant-api/internal/repository/postgres/repository.go:44
+[0m[33m[162.641ms] [34;1m[rows:0][0m SELECT * FROM "universities" WHERE "universities"."deleted_at" IS NULL LIMIT 10
+[GIN] 2026/02/12 - 01:47:05 | 200 |  394.152125ms |             ::1 | GET      "/api/v1/universities"
+[GIN] 2026/02/12 - 01:47:05 | 200 |  394.170042ms |             ::1 | GET      "/api/v1/universities"
+signal: killed
