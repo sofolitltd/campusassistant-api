@@ -12,19 +12,27 @@ type Config struct {
 	Environment string `mapstructure:"ENVIRONMENT"`
 }
 
-func LoadConfig() (config *Config, err error) {
-	viper.SetConfigFile(".env")
-	viper.AutomaticEnv()
+func LoadConfig() (*Config, error) {
+	v := viper.New()
+	v.SetConfigFile(".env")
+	v.AutomaticEnv()
+
+	// Explicitly bind environment variables
+	v.BindEnv("DATABASE_URL")
+	v.BindEnv("PORT")
+	v.BindEnv("ENVIRONMENT")
 
 	// Default values
-	viper.SetDefault("PORT", "8080")
-	viper.SetDefault("ENVIRONMENT", "development")
+	v.SetDefault("PORT", "8080")
+	v.SetDefault("ENVIRONMENT", "development")
 
-	err = viper.ReadInConfig()
-	if err != nil {
+	if err := v.ReadInConfig(); err != nil {
 		log.Println("No .env file found, using environment variables")
 	}
 
-	err = viper.Unmarshal(&config)
-	return
+	var config Config
+	if err := v.Unmarshal(&config); err != nil {
+		return nil, err
+	}
+	return &config, nil
 }
