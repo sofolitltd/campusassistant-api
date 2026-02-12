@@ -1,22 +1,23 @@
 # Stage 1: Build the Go binary
-FROM golang:1.22-alpine AS builder
+# Updated to 1.26 to satisfy go.mod requirement of >= 1.25.7
+FROM golang:1.26-alpine AS builder
 WORKDIR /app
 
-# Copy go.mod and go.sum from the root to install dependencies first
+# Copy dependency files
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the rest of the source code
+# Copy source code
 COPY . .
 
-# Build the binary targeting your specific main file path
+# Build the binary from your specific path
 RUN CGO_ENABLED=0 GOOS=linux go build -o main ./cmd/api/main.go
 
-# Stage 2: Create a tiny final image
+# Stage 2: Tiny Run Image
 FROM alpine:latest
 WORKDIR /root/
 COPY --from=builder /app/main .
 
-# Expose the port your Go app uses (e.g., 8080)
+# Expose your API port
 EXPOSE 8080
 CMD ["./main"]
