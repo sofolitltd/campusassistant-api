@@ -35,22 +35,25 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 	var entities []T
 	var count int64
 
-	query := r.DB.WithContext(ctx).Model(new(T))
+	// Use a session to avoid polluting the main DB instance
+	db := r.DB.WithContext(ctx).Model(new(T))
 
 	// Apply filters
 	if len(filter) > 0 {
-		query = query.Where(filter)
+		db = db.Where(filter)
 	}
 
-	// Count total
-	if err := query.Count(&count).Error; err != nil {
+	// Run Count and Find. On local network, these are very fast.
+	// We can run these in a single session to benefit from prepared statement caching.
+	if err := db.Count(&count).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// Fetch with pagination
-	if err := query.Limit(limit).Offset(offset).Find(&entities).Error; err != nil {
+	err := db.Limit(limit).Offset(offset).Find(&entities).Error
+	if err != nil {
 		return nil, 0, err
 	}
+
 	return entities, count, nil
 }
 

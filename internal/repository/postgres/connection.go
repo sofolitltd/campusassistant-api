@@ -20,7 +20,9 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 	}
 
 	gormConfig := &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger:                 logger.Default.LogMode(logger.Info),
+		PrepareStmt:            true, // Cache prepared statements for faster execution
+		SkipDefaultTransaction: true, // Speeds up write operations by skipping nested transactions
 	}
 
 	if cfg.Environment == "production" {

@@ -6,11 +6,17 @@ POST {{baseUrl}}/universities
 Content-Type: application/json
 
 {
-    "name": "University of Chittagong",
-    "acronym": "CU",
-    "address": "Chittagong, Bangladesh",
-    "website": "https://cu.ac.bd"
+    "name": "University of Dhaka",
+    "acronym": "DU",
+    "address": "Dhaka, Bangladesh",
+    "website": "https://du.ac.bd"
 }
+# {
+#     "name": "University of Chittagong",
+#     "acronym": "CU",
+#     "address": "Chittagong, Bangladesh",
+#     "website": "https://cu.ac.bd"
+# }
 
 ### Get All Universities
 GET {{baseUrl}}/universities
