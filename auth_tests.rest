@@ -1,0 +1,185 @@
+@baseUrl = http://localhost:8080/api/v1
+@apiKey = 12345
+
+### ========================================
+### JWT AUTHENTICATION TESTS
+### ========================================
+
+### 1. Register a new user
+# @name register
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+    "email": "john.doe@example.com",
+    "password": "SecurePass123!",
+    "first_name": "John",
+    "last_name": "Doe",
+    "phone": "+8801712345678",
+    "gender": "Male",
+    "role": "student"
+}
+
+### Capture tokens from registration
+@accessToken = {{register.response.body.access_token}}
+@refreshToken = {{register.response.body.refresh_token}}
+@userId = {{register.response.body.user.id}}
+
+### 2. Login with credentials
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+    "email": "john.doe@example.com",
+    "password": "SecurePass123!"
+}
+
+### Update tokens from login
+@accessToken = {{login.response.body.access_token}}
+@refreshToken = {{login.response.body.refresh_token}}
+
+### 3. Get current user profile (Protected route - requires JWT)
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{accessToken}}
+
+### 4. Refresh access token
+# @name refresh
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+    "refresh_token": "{{refreshToken}}"
+}
+
+### Update access token from refresh
+@accessToken = {{refresh.response.body.access_token}}
+
+### 5. Test with invalid token (should fail with 401)
+GET {{baseUrl}}/auth/me
+Authorization: Bearer invalid_token_here
+
+### 6. Test login with wrong password (should fail with 401)
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+    "email": "john.doe@example.com",
+    "password": "WrongPassword123"
+}
+
+### 7. Register with duplicate email (should fail with 409)
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+    "email": "john.doe@example.com",
+    "password": "AnotherPass123!",
+    "first_name": "Jane",
+    "last_name": "Smith"
+}
+
+### 8. Register with weak password (should fail with 400)
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+    "email": "weak@example.com",
+    "password": "123",
+    "first_name": "Weak",
+    "last_name": "Password"
+}
+
+### ========================================
+### REGISTER WITH UNIVERSITY & DEPARTMENT
+### ========================================
+
+### First create a university (requires API Key)
+# @name createUniversity
+POST {{baseUrl}}/universities
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "name": "University of Dhaka",
+    "acronym": "DU",
+    "slug": "dhaka-university",
+    "established_year": 1921,
+    "address": "Dhaka, Bangladesh",
+    "website_url": "https://du.ac.bd"
+}
+
+@universityId = {{createUniversity.response.body.id}}
+
+### Create a department
+# @name createDepartment
+POST {{baseUrl}}/departments
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "name": "Computer Science & Engineering",
+    "acronym": "CSE",
+    "slug": "cse",
+    "university_id": "{{universityId}}",
+    "established_year": 1993,
+    "semesters": 8
+}
+
+@departmentId = {{createDepartment.response.body.id}}
+
+### 9. Register user with university and department
+# @name registerWithOrg
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+    "email": "student@du.ac.bd",
+    "password": "StudentPass123!",
+    "first_name": "Ahmed",
+    "last_name": "Rahman",
+    "phone": "+8801812345678",
+    "gender": "Male",
+    "role": "student",
+    "university_id": "{{universityId}}",
+    "department_id": "{{departmentId}}"
+}
+
+### 10. Login as the organizational user
+# @name loginOrg
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+    "email": "student@du.ac.bd",
+    "password": "StudentPass123!"
+}
+
+@orgAccessToken = {{loginOrg.response.body.access_token}}
+
+### 11. Get profile (should include university and department IDs)
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{orgAccessToken}}
+
+### ========================================
+### ADMIN USER REGISTRATION
+### ========================================
+
+### 12. Register an admin user
+# @name registerAdmin
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+    "email": "admin@campusassistant.com",
+    "password": "AdminSecure123!",
+    "first_name": "Super",
+    "last_name": "Admin",
+    "role": "super_admin"
+}
+
+@adminToken = {{registerAdmin.response.body.access_token}}
+
+### 13. Get admin profile
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{adminToken}}

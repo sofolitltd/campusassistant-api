@@ -1,0 +1,198 @@
+@baseUrl = http://localhost:8080/api/v1
+@apiKey = 12345
+
+# IMPORTANT: Run requests in sequence (1 -> 2 -> 3...)
+# If a request fails, the variables below it will not work.
+
+### 1. Universities
+# @name createUniversity
+POST {{baseUrl}}/universities
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "name": "University of Chittagong",
+    "acronym": "CU",
+    "slug": "university-of-chittagong",
+    "established_year": 1966,
+    "address": "Chittagong, Bangladesh",
+    "about": "<h1>Welcome to CU</h1><p>The largest campus in Bangladesh.</p>",
+    "latitude": 22.4716,
+    "longitude": 91.7877,
+    "website_url": "https://cu.ac.bd"
+}
+
+### Capture ID
+@universityId = {{createUniversity.response.body.id}}
+
+### Get All Universities
+GET {{baseUrl}}/universities
+X-API-Key: {{apiKey}}
+
+### Get University by ID
+GET {{baseUrl}}/universities/{{universityId}}
+X-API-Key: {{apiKey}}
+
+
+### 2. Departments
+# @name createDepartment
+POST {{baseUrl}}/departments
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "name": "Department of Psychology",
+    "acronym": "PSY",
+    "slug": "psychology",
+    "university_id": "{{universityId}}",
+    "established_year": 2005,
+    "about": "Exploring the human mind.",
+    "semesters": 8
+}
+
+### Capture ID
+@departmentId = {{createDepartment.response.body.id}}
+
+### 3. Semesters
+# @name createSemester
+POST {{baseUrl}}/semesters
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "name": "1st Year 1st Semester",
+    "order": 1,
+    "university_id": "{{universityId}}",
+    "department_id": "{{departmentId}}",
+    "total_courses": 5,
+    "credits": 18,
+    "marks": 300
+}
+
+### Capture ID
+@semesterId = {{createSemester.response.body.id}}
+
+### 4. Sessions
+# @name createSession
+POST {{baseUrl}}/sessions
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "name": "2019-2020",
+    "slug": "19-20",
+    "university_id": "{{universityId}}",
+    "department_id": "{{departmentId}}",
+    "is_active": true
+}
+
+### Capture ID
+@sessionId = {{createSession.response.body.id}}
+
+### 5. Batches
+# @name createBatch
+POST {{baseUrl}}/batches
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "name": "Batch 10",
+    "slug": "batch-10",
+    "university_id": "{{universityId}}",
+    "department_id": "{{departmentId}}",
+    "session_id": "{{sessionId}}",
+    "is_studying": true
+}
+
+### Capture ID
+@batchId = {{createBatch.response.body.id}}
+
+### 6. Halls
+# @name createHall
+POST {{baseUrl}}/halls
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "name": "A. F. Rahman Hall",
+    "slug": "af-rahman-hall",
+    "university_id": "{{universityId}}"
+}
+
+### Capture ID
+@hallId = {{createHall.response.body.id}}
+
+### 7. Users (Firebase Based)
+# @name createUser
+POST {{baseUrl}}/users
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "email": "saifhossain153@gmail.com",
+    "firebase_uid": "OJIGBQcTcpcCmP4jiRMVdsWoQiC2",
+    "first_name": "MD. Saif",
+    "last_name": "Hossain",
+    "role": "student",
+    "fcm_token": "etpxaDIaSD-yol6...",
+    "gender": "Male"
+}
+
+### Capture ID
+@userId = {{createUser.response.body.id}}
+
+### 8. Students (Initial Admin Creation / Skeleton)
+# @name createStudentSkeleton
+POST {{baseUrl}}/students
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "user_id": "{{userId}}",
+    "student_id": "15608055",
+    "university_id": "{{universityId}}",
+    "department_id": "{{departmentId}}",
+    "batch_id": "{{batchId}}",
+    "session_id": "{{sessionId}}",
+    "hall_id": "{{hallId}}",
+    "verification_code": "55103346",
+    "is_claimed": false
+}
+
+### 9. Resources (Unified model for Notes/Books/Questions)
+# @name createResource
+POST {{baseUrl}}/resources
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "type": "book",
+    "title": "Experience Human Development - 14th Ed.",
+    "subtitle": "Diane Papalia",
+    "subtitle_type": "Author",
+    "course_code": "psy-404",
+    "file_url": "https://firebasestorage.googleapis.com/...",
+    "uploader_name": "Reyad(17-18)",
+    "uploader_uid": "uploader_firebase_uid",
+    "university_id": "{{universityId}}",
+    "department_id": "{{departmentId}}",
+    "years": [2018, 2019, 2020],
+    "status": "pro"
+}
+
+### Filter Resources
+GET {{baseUrl}}/resources?type=book&university_id={{universityId}}
+X-API-Key: {{apiKey}}
+
+### 10. Transport
+POST {{baseUrl}}/transports
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "university_id": "{{universityId}}",
+    "route_name": "Campus - City Gate",
+    "bus_number": "Bus 05",
+    "schedule": "Departs at 8:00 AM",
+    "driver_contact": "0123456789"
+}
