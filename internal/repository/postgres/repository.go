@@ -40,24 +40,29 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 	db := r.DB.WithContext(ctx).Model(new(T))
 
 	// Apply filters
+	shouldPreload := false
 	for key, value := range filter {
 		if key == "search" {
 			searchVal := "%" + value.(string) + "%"
-			// This is a generic search, might need to be specific for each entity.
-			// For now, we'll try to match name, email or phone if they exist.
 			db = db.Where("name ILIKE ? OR title ILIKE ? OR designation ILIKE ? OR email ILIKE ? OR phone ILIKE ? OR student_id ILIKE ?", searchVal, searchVal, searchVal, searchVal, searchVal, searchVal)
+		} else if key == "preload" {
+			if b, ok := value.(bool); ok && b {
+				shouldPreload = true
+			}
 		} else {
 			db = db.Where(key+" = ?", value)
 		}
 	}
 
-	// Run Count and Find. On local network, these are very fast.
-	// We can run these in a single session to benefit from prepared statement caching.
 	if err := db.Count(&count).Error; err != nil {
 		return nil, 0, err
 	}
 
-	err := db.Preload(clause.Associations).Limit(limit).Offset(offset).Find(&entities).Error
+	if shouldPreload {
+		db = db.Preload(clause.Associations)
+	}
+
+	err := db.Limit(limit).Offset(offset).Find(&entities).Error
 	if err != nil {
 		return nil, 0, err
 	}

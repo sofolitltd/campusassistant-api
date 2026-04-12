@@ -62,15 +62,17 @@ func (h *GenericHandler[T]) GetByID(c *gin.Context) {
 }
 
 func (h *GenericHandler[T]) GetAll(c *gin.Context) {
-	limitStr := c.DefaultQuery("limit", "100")
+	limitStr := c.DefaultQuery("limit", "20")
 	offsetStr := c.DefaultQuery("offset", "0")
 
 	limit, _ := strconv.Atoi(limitStr)
 	offset, _ := strconv.Atoi(offsetStr)
 
-	// In Go, 0 usually means no limit in many contexts, but we'll set a high number
+	// Default to 20 if zero or negative, cap at 100 max
 	if limit <= 0 {
-		limit = 1000
+		limit = 20
+	} else if limit > 100 {
+		limit = 100
 	}
 
 	filter := make(map[string]interface{})
@@ -103,6 +105,10 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 
 	if search := c.Query("search"); search != "" {
 		filter["search"] = search
+	}
+
+	if includeDetails := c.Query("include_details"); includeDetails == "true" {
+		filter["preload"] = true
 	}
 
 	// DEBUG: Print filter map
