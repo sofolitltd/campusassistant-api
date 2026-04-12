@@ -22,6 +22,9 @@ type Config struct {
 	// API Security
 	APIKey string `mapstructure:"API_KEY"`
 
+	// Migrations
+	DBAutoMigrate bool `mapstructure:"DB_AUTO_MIGRATE"`
+
 	// JWT Authentication
 	JWTSecret             string `mapstructure:"JWT_SECRET"`
 	JWTAccessTokenExpiry  int    `mapstructure:"JWT_ACCESS_TOKEN_EXPIRY"`  // in minutes
@@ -46,6 +49,7 @@ func LoadConfig() (*Config, error) {
 	v.BindEnv("JWT_SECRET")
 	v.BindEnv("JWT_ACCESS_TOKEN_EXPIRY")
 	v.BindEnv("JWT_REFRESH_TOKEN_EXPIRY")
+	v.BindEnv("DB_AUTO_MIGRATE")
 
 	// Default values
 	v.SetDefault("PORT", "8080")

@@ -21,6 +21,22 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// Middlewares
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
+	r.Use(middleware.CORSMiddleware())
+	
+	// Health Check (Public)
+	r.GET("/health", func(c *gin.Context) {
+		dbStatus := "connected"
+		sqlDB, err := db.DB()
+		if err != nil || sqlDB.Ping() != nil {
+			dbStatus = "disconnected"
+		}
+
+		c.JSON(200, gin.H{
+			"status":      "UP",
+			"database":    dbStatus,
+			"environment": cfg.Environment,
+		})
+	})
 
 	// Initialize JWT Manager
 	jwtManager := auth.NewJWTManager(
@@ -55,7 +71,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	// Specialized Student Routes
 	studentRepo := postgres.NewGormRepository[domain.Student](db)
-	studentUsecase := usecase.NewGenericUsecase[domain.Student](studentRepo)
+	studentUsecase := usecase.NewGenericUsecase(studentRepo)
 	studentHandler := handler.NewStudentHandler(studentUsecase)
 	studentGroup := v1.Group("/students")
 	{
@@ -71,7 +87,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	registerRoutes[domain.Teacher](v1, db, "teachers")
 	registerRoutes[domain.Staff](v1, db, "staffs")
 	crRepo := postgres.NewGormRepository[domain.CR](db)
-	crUsecase := usecase.NewGenericUsecase[domain.CR](crRepo)
+	crUsecase := usecase.NewGenericUsecase(crRepo)
 	crHandler := handler.NewCrHandler(crUsecase)
 	crGroup := v1.Group("/crs")
 	{
@@ -84,7 +100,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	registerRoutes[domain.Verification](v1, db, "verifications")
 
 	resourceRepo := postgres.NewResourceRepository(db)
-	resourceUsecase := usecase.NewGenericUsecase[domain.Resource](resourceRepo)
+	resourceUsecase := usecase.NewGenericUsecase(resourceRepo)
 	resourceHandler := handler.NewResourceHandler(resourceUsecase)
 	rg := v1.Group("/resources")
 	{
@@ -134,8 +150,8 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	registerRoutes[domain.CourseCategory](v1, db, "course-categories")
 	registerRoutes[domain.CoursePrefix](v1, db, "course-prefixes")
 	chapterRepo := postgres.NewChapterRepository(db)
-	chapterUsecase := usecase.NewGenericUsecase[domain.Chapter](chapterRepo)
-	chapterHandler := handler.NewGenericHandler[domain.Chapter](chapterUsecase)
+	chapterUsecase := usecase.NewGenericUsecase(chapterRepo)
+	chapterHandler := handler.NewGenericHandler(chapterUsecase)
 	chg := v1.Group("/chapters")
 	{
 		chg.POST("", chapterHandler.Create)
@@ -183,8 +199,8 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 func registerRoutes[T any](group *gin.RouterGroup, db *gorm.DB, path string) {
 	repo := postgres.NewGormRepository[T](db)
-	uc := usecase.NewGenericUsecase[T](repo)
-	h := handler.NewGenericHandler[T](uc)
+	uc := usecase.NewGenericUsecase(repo)
+	h := handler.NewGenericHandler(uc)
 
 	g := group.Group("/" + path)
 	{

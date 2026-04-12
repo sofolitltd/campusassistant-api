@@ -27,12 +27,18 @@ func main() {
 		logger.Fatalf("Database connection failed: %v", err)
 	}
 
-	// 4. Run Migrations in background to avoid Vercel startup timeout
-	go func() {
-		if err := postgres.RunMigrations(db); err != nil {
-			log.Printf("Background migration failed: %v", err)
-		}
-	}()
+	// 4. Run Migrations (Conditional)
+	// Only run migrations in development or if explicitly enabled
+	if cfg.Environment == "development" || cfg.DBAutoMigrate {
+		logger.Infof("Migrations enabled (Mode: %s, AutoMigrate: %v). Running...", cfg.Environment, cfg.DBAutoMigrate)
+		go func() {
+			if err := postgres.RunMigrations(db); err != nil {
+				log.Printf("Background migration failed: %v", err)
+			}
+		}()
+	} else {
+		logger.Info("Migrations skipped for production (Set DB_AUTO_MIGRATE=true to enable)")
+	}
 
 	// 4. Setup Router
 	r := httpDelivery.NewRouter(cfg, db)
