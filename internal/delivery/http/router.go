@@ -22,7 +22,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	r.Use(gin.Logger())
 	r.Use(gin.Recovery())
 	r.Use(middleware.CORSMiddleware())
-	
+
 	// Health Check (Public)
 	r.GET("/health", func(c *gin.Context) {
 		dbStatus := "connected"
