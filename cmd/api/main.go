@@ -37,7 +37,7 @@ func main() {
 			}
 		}()
 	} else {
-		logger.Info("Migrations skipped for production (Set DB_AUTO_MIGRATE=true to enable)")
+		logger.Infof("Migrations skipped for production (Set DB_AUTO_MIGRATE=true to enable)")
 	}
 
 	// 4. Setup Router
