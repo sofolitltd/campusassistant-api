@@ -9,8 +9,10 @@ import (
 // Staff represents a general staff member (office, lab, support).
 type Staff struct {
 	Base
-	DepartmentID     uuid.UUID  `gorm:"type:uuid;index" json:"department_id,omitempty"`
-	UniversityID     uuid.UUID  `gorm:"type:uuid;not null;index" json:"university_id"`
+	DepartmentID     uuid.UUID   `gorm:"type:uuid;index" json:"department_id,omitempty"`
+	Department       *Department `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
+	UniversityID     uuid.UUID   `gorm:"type:uuid;not null;index" json:"university_id"`
+	University       *University `gorm:"foreignKey:UniversityID" json:"university,omitempty"`
 	Name             string     `gorm:"size:100" json:"name"`
 	Post             string     `gorm:"size:100" json:"post"` // e.g., Office Assistant, Lab Technician
 	Mobile           string     `gorm:"size:20" json:"mobile"`

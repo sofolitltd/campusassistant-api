@@ -11,8 +11,10 @@ type Teacher struct {
 	Base
 	UserID           *uuid.UUID `gorm:"type:uuid;uniqueIndex" json:"user_id,omitempty"`
 	User             *User      `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"user,omitempty"`
-	DepartmentID     uuid.UUID  `gorm:"type:uuid;not null;index" json:"department_id"`
-	UniversityID     uuid.UUID  `gorm:"type:uuid;not null;index" json:"university_id"`
+	DepartmentID     uuid.UUID   `gorm:"type:uuid;not null;index" json:"department_id"`
+	Department       *Department `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
+	UniversityID     uuid.UUID   `gorm:"type:uuid;not null;index" json:"university_id"`
+	University       *University `gorm:"foreignKey:UniversityID" json:"university,omitempty"`
 	Name             string     `gorm:"size:100" json:"name"`
 	Email            string     `gorm:"size:100" json:"email"`
 	Phone            string     `gorm:"size:20" json:"phone"`

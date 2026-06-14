@@ -24,7 +24,9 @@ type Alumni struct {
 	SocialLinks      datatypes.JSON `gorm:"type:jsonb" json:"social_links"` // e.g. {"facebook": "...", "linkedin": "..."}
 	CreatedBy        uuid.UUID      `gorm:"type:uuid" json:"created_by"`
 	UniversityID     uuid.UUID      `gorm:"type:uuid;index" json:"university_id"`
+	University       *University    `gorm:"foreignKey:UniversityID" json:"university,omitempty"`
 	DepartmentID     uuid.UUID      `gorm:"type:uuid;index" json:"department_id"`
+	Department       *Department    `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
 	StudentProfileID *uuid.UUID     `gorm:"type:uuid;index" json:"student_profile_id,omitempty"`
 	StudentProfile   *Student       `gorm:"foreignKey:StudentProfileID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"student_profile,omitempty"`
 	OrganizationID   *uuid.UUID     `gorm:"type:uuid;index" json:"organization_id,omitempty"`
