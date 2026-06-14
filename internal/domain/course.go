@@ -29,5 +29,6 @@ type Course struct {
 	SemesterID *uuid.UUID `gorm:"type:uuid;index" json:"semester_id"`
 	Semester   *Semester  `gorm:"foreignKey:SemesterID" json:"semester,omitempty"`
 
-	Batches []Batch `gorm:"many2many:course_batches;save_associations:false" json:"batches,omitempty"`
+	BatchIDs []string `gorm:"-" json:"batch_ids,omitempty"`
+	Batches  []Batch  `gorm:"many2many:course_batches;" json:"batches,omitempty"`
 }
