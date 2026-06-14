@@ -78,3 +78,21 @@ func (s *R2Storage) UploadReader(ctx context.Context, reader io.Reader, path str
 
 	return fmt.Sprintf("%s/%s", s.publicURL, path), nil
 }
+
+func (s *R2Storage) DeleteFile(ctx context.Context, fileURL string) error {
+	// Extract path from public URL
+	// fileURL is e.g. "https://pub-uuid.r2.dev/banners/2026/02/uuid_name.png"
+	// We need "banners/2026/02/uuid_name.png"
+	path := ""
+	if len(fileURL) > len(s.publicURL) {
+		path = fileURL[len(s.publicURL)+1:] // +1 for the slash
+	} else {
+		return fmt.Errorf("invalid file URL: %s", fileURL)
+	}
+
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(path),
+	})
+	return err
+}

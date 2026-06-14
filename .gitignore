@@ -1,2 +1,6 @@
 .env
 server.log
+.DS_Store
+*.log
+/campusassistant-api
+/main

@@ -12,5 +12,5 @@ type Chapter struct {
 	DepartmentID uuid.UUID `gorm:"type:uuid;index" json:"department_id"`
 	UniversityID uuid.UUID `gorm:"type:uuid;index" json:"university_id"`
 
-	Batches []Batch `gorm:"many2many:chapter_batches;save_associations:false" json:"batches,omitempty"`
+	Batches []Batch `gorm:"many2many:chapter_batches;" json:"batches,omitempty"`
 }

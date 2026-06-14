@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 )
 
@@ -33,14 +35,22 @@ type User struct {
 	AvatarURL  string `json:"avatar_url"`
 	IsActive   bool   `gorm:"default:true" json:"is_active"`
 	IsVerified bool   `gorm:"default:false" json:"is_verified"`
+	IsPro      bool   `gorm:"default:false" json:"is_pro"`
+	ProExpiry  *time.Time `json:"pro_expiry,omitempty"`
 
 	// Privacy Settings
 	IsPhonePublic bool `gorm:"default:false" json:"is_phone_public"`
 	IsEmailPublic bool `gorm:"default:false" json:"is_email_public"`
 
 	// Organizational Links
-	UniversityID uuid.UUID `gorm:"type:uuid;index" json:"university_id,omitempty"`
-	DepartmentID uuid.UUID `gorm:"type:uuid;index" json:"department_id,omitempty"`
+	UniversityID *uuid.UUID  `gorm:"type:uuid;index" json:"university_id,omitempty"`
+	University   *University `gorm:"foreignKey:UniversityID" json:"university,omitempty"`
+	DepartmentID *uuid.UUID  `gorm:"type:uuid;index" json:"department_id,omitempty"`
+	Department   *Department `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
+
+	// Academic/Professional Profiles (Preloadable)
+	Student *Student `gorm:"foreignKey:UserID" json:"student,omitempty"`
+	Teacher *Teacher `gorm:"foreignKey:UserID" json:"teacher,omitempty"`
 }
 
 // FullName returns the user's full name

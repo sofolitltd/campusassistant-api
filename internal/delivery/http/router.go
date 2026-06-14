@@ -4,11 +4,13 @@ import (
 	"campusassistant-api/internal/config"
 	"campusassistant-api/internal/delivery/http/handler"
 	"campusassistant-api/internal/delivery/http/middleware"
+	ws "campusassistant-api/internal/delivery/http/websocket"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/repository/postgres"
 	"campusassistant-api/internal/usecase"
 	"campusassistant-api/pkg/auth"
 	"campusassistant-api/pkg/storage"
+	netHTTP "net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -17,6 +19,7 @@ import (
 
 func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	r := gin.Default()
+	r.MaxMultipartMemory = 10 << 20 // 10 MB limit for file uploads
 
 	// Middlewares
 	r.Use(gin.Logger())
@@ -49,7 +52,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	v1 := r.Group("/api/v1")
 
 	// Public Auth Routes (No API Key or JWT required)
-	authHandler := handler.NewAuthHandler(db, jwtManager)
+	authHandler := handler.NewAuthHandler(db, jwtManager, cfg.JWTAccessTokenExpiry)
 	authGroup := v1.Group("/auth")
 	{
 		authGroup.POST("/register", authHandler.Register)
@@ -58,6 +61,24 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		// Protected route - requires JWT
 		authGroup.GET("/me", middleware.JWTMiddleware(jwtManager), authHandler.GetMe)
 	}
+
+	// Public Proxy Route for local/emulator R2 image proxying
+	v1.GET("/proxy", func(c *gin.Context) {
+		targetURL := c.Query("url")
+		if targetURL == "" {
+			c.JSON(netHTTP.StatusBadRequest, gin.H{"error": "url is required"})
+			return
+		}
+
+		resp, err := netHTTP.Get(targetURL)
+		if err != nil {
+			c.JSON(netHTTP.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+
+		c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
+	})
 
 	// Protected Routes (Require API Key for now, can add JWT later)
 	v1.Use(middleware.APIKeyMiddleware(cfg.APIKey))
@@ -132,8 +153,10 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 
 	registerRoutes[domain.Hall](v1, db, "halls")
+	registerRoutes[domain.Organization](v1, db, "organizations")
 	registerRoutes[domain.Alumni](v1, db, "alumni")
 	registerRoutes[domain.Bookmark](v1, db, "bookmarks")
+	registerRoutes[domain.Routine](v1, db, "routines")
 
 	courseRepo := postgres.NewCourseRepository(db)
 	courseUsecase := usecase.NewGenericUsecase[domain.Course](courseRepo)
@@ -161,7 +184,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		chg.DELETE("/:id", chapterHandler.Delete)
 	}
 
-	// specialized Banner Routes
+	// Specialized Banner Routes
 	bannerRepo := postgres.NewBannerRepository(db)
 	bannerUsecase := usecase.NewGenericUsecase[domain.Banner](bannerRepo)
 	bannerHandler := handler.NewGenericHandler[domain.Banner](bannerUsecase)
@@ -174,6 +197,12 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		bannerGroup.DELETE("/:id", bannerHandler.Delete)
 	}
 
+	// Dashboard Stats
+	statsRepo := postgres.NewStatsRepository(db)
+	statsHandler := handler.NewStatsHandler(statsRepo)
+	v1.GET("/stats", statsHandler.GetDashboardStats)
+
+	registerRoutes[domain.Club](v1, db, "clubs")
 	registerRoutes[domain.EmergencyContact](v1, db, "emergency-contacts")
 
 	// R2 Upload Routes
@@ -181,6 +210,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	if err == nil {
 		uploadHandler := handler.NewUploadHandler(db, storage)
 		v1.POST("/upload", uploadHandler.UploadImage)
+		v1.DELETE("/upload", uploadHandler.DeleteFile)
 		r.GET("/upload", uploadHandler.ShowUploadPage) // Serving the demo page at root /upload
 	}
 
@@ -190,8 +220,73 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	subGroup := v1.Group("/subscriptions")
 	{
 		subGroup.GET("/plans", subHandler.GetPlans)
-		subGroup.GET("/features", subHandler.GetFeatures)
 		subGroup.GET("/user/:uid", subHandler.GetUserSubscription)
+		
+		// Admin Routes
+		subGroup.GET("", subHandler.GetAllSubscriptions)
+		subGroup.POST("", subHandler.CreateSubscription)
+		
+		planGroup := v1.Group("/subscription-plans")
+		{
+			planGroup.GET("", subHandler.GetAllPlans)
+			planGroup.POST("", subHandler.CreatePlan)
+			planGroup.PUT("/:id", subHandler.UpdatePlan)
+			planGroup.DELETE("/:id", subHandler.DeletePlan)
+		}
+	}
+
+	// Community Routes
+	communityRepo := postgres.NewCommunityRepository(db)
+	communityUsecase := usecase.NewCommunityUseCase(communityRepo)
+	communityHandler := handler.NewCommunityHandler(communityUsecase)
+	communityGroup := v1.Group("/community")
+	communityGroup.Use(middleware.JWTMiddleware(jwtManager))
+	{
+		communityGroup.POST("/posts", communityHandler.CreatePost)
+		communityGroup.GET("/posts", communityHandler.GetPosts)
+		communityGroup.GET("/posts/saved", communityHandler.GetSavedPosts)
+		communityGroup.POST("/posts/:id/like", communityHandler.LikePost)
+		communityGroup.POST("/posts/:id/unlike", communityHandler.UnlikePost)
+		communityGroup.POST("/posts/:id/save", communityHandler.SavePost)
+		communityGroup.POST("/posts/:id/unsave", communityHandler.UnsavePost)
+		communityGroup.POST("/posts/:id/comments", communityHandler.AddComment)
+		communityGroup.GET("/posts/:id/comments", communityHandler.GetComments)
+		communityGroup.POST("/comments/:comment_id/like", communityHandler.LikeComment)
+		communityGroup.POST("/comments/:comment_id/unlike", communityHandler.UnlikeComment)
+		communityGroup.PUT("/comments/:comment_id", communityHandler.UpdateComment)
+		communityGroup.DELETE("/comments/:comment_id", communityHandler.DeleteComment)
+	}
+
+	// Chat Routes
+	chatRepo := postgres.NewChatRepository(db)
+	chatUsecase := usecase.NewChatUseCase(chatRepo)
+	chatHub := ws.NewHub()
+	chatWSHandler := ws.NewChatWSHandler(chatHub, chatUsecase)
+	chatHandler := handler.NewChatHandler(chatUsecase, chatWSHandler)
+
+	// WebSocket routes (JWT-protected, no API key needed)
+	wsGroup := r.Group("/ws/chat")
+	wsGroup.Use(middleware.JWTMiddleware(jwtManager))
+	{
+		wsGroup.GET("/:id", chatWSHandler.ServeWS)
+	}
+
+	chatGroup := v1.Group("/conversations")
+	chatGroup.Use(middleware.JWTMiddleware(jwtManager))
+	{
+		chatGroup.GET("/contacts", chatHandler.GetContacts)
+		chatGroup.GET("", chatHandler.GetConversations)
+		chatGroup.GET("/pending", chatHandler.GetPendingConversations)
+		chatGroup.POST("", chatHandler.GetOrCreateConversation)
+		chatGroup.GET("/:id/messages", chatHandler.GetMessages)
+		chatGroup.POST("/:id/messages", chatHandler.SendMessage)
+		chatGroup.PUT("/:id/messages/:messageId", chatHandler.UpdateMessage)
+		chatGroup.DELETE("/:id/messages/:messageId", chatHandler.DeleteMessage)
+		chatGroup.DELETE("/:id", chatHandler.DeleteConversation)
+		chatGroup.POST("/:id/read", chatHandler.MarkAsRead)
+		chatGroup.POST("/:id/accept", chatHandler.AcceptRequest)
+		chatGroup.POST("/:id/block", chatHandler.BlockRequest)
+		chatGroup.POST("/:id/archive", chatHandler.ArchiveConversation)
 	}
 
 	return r

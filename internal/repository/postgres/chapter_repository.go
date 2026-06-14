@@ -19,6 +19,36 @@ func NewChapterRepository(db *gorm.DB) domain.Repository[domain.Chapter] {
 	}
 }
 
+func (r *chapterRepository) Create(ctx context.Context, entity *domain.Chapter) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Omit("Batches").Create(entity).Error; err != nil {
+			return err
+		}
+		if len(entity.Batches) > 0 {
+			if err := tx.Model(entity).Association("Batches").Replace(entity.Batches); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (r *chapterRepository) Update(ctx context.Context, entity *domain.Chapter) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(entity).
+			Select("CourseCode", "ChapterNo", "ChapterTitle", "DepartmentID", "UniversityID").
+			Updates(entity).Error; err != nil {
+			return err
+		}
+		if entity.Batches != nil {
+			if err := tx.Model(entity).Association("Batches").Replace(entity.Batches); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (r *chapterRepository) GetAll(ctx context.Context, filter map[string]interface{}, limit, offset int) ([]domain.Chapter, int64, error) {
 	var entities []domain.Chapter
 	var count int64

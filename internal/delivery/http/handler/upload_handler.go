@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"campusassistant-api/internal/domain"
+	"campusassistant-api/pkg/logger"
 	"campusassistant-api/pkg/storage"
 
 	"github.com/gin-gonic/gin"
@@ -71,7 +72,7 @@ func (h *UploadHandler) UploadImage(c *gin.Context) {
 		return
 	}
 
-	fmt.Printf("DEBUG: Attachment saved to DB with ID: %s\n", attachment.ID)
+	logger.Infof("Attachment saved to DB with ID: %s", attachment.ID)
 
 	c.JSON(http.StatusOK, attachment)
 }
@@ -130,4 +131,23 @@ func (h *UploadHandler) ShowUploadPage(c *gin.Context) {
 </html>
 `
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(html))
+}
+
+func (h *UploadHandler) DeleteFile(c *gin.Context) {
+	fileURL := c.Query("url")
+	if fileURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "URL is required"})
+		return
+	}
+
+	err := h.storage.DeleteFile(c.Request.Context(), fileURL)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to delete from storage: %v", err)})
+		return
+	}
+
+	// Also delete from attachments table if exists
+	h.db.Where("file_url = ?", fileURL).Delete(&domain.Attachment{})
+
+	c.JSON(http.StatusOK, gin.H{"message": "File deleted successfully"})
 }

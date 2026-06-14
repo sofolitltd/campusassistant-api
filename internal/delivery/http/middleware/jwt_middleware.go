@@ -12,21 +12,20 @@ import (
 // JWTMiddleware validates JWT tokens and sets user context
 func JWTMiddleware(jwtManager *auth.JWTManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Get Authorization header
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
+		// Get token from Authorization header or query param (for WebSocket)
+		tokenString := c.GetHeader("Authorization")
+		if tokenString == "" {
+			tokenString = c.Query("token")
+		}
+		if tokenString == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization header or token query param is required"})
 			return
 		}
 
-		// Check if it's a Bearer token
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid authorization header format. Use: Bearer <token>"})
-			return
+		// If from header, strip Bearer prefix
+		if strings.HasPrefix(tokenString, "Bearer ") {
+			tokenString = strings.TrimPrefix(tokenString, "Bearer ")
 		}
-
-		tokenString := parts[1]
 
 		// Validate token
 		claims, err := jwtManager.ValidateToken(tokenString)

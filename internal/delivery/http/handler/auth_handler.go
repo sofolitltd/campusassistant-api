@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -15,15 +14,17 @@ import (
 
 // AuthHandler handles authentication requests
 type AuthHandler struct {
-	db         *gorm.DB
-	jwtManager *auth.JWTManager
+	db                *gorm.DB
+	jwtManager        *auth.JWTManager
+	accessTokenExpiry int // in minutes
 }
 
 // NewAuthHandler creates a new auth handler
-func NewAuthHandler(db *gorm.DB, jwtManager *auth.JWTManager) *AuthHandler {
+func NewAuthHandler(db *gorm.DB, jwtManager *auth.JWTManager, accessTokenExpiry int) *AuthHandler {
 	return &AuthHandler{
-		db:         db,
-		jwtManager: jwtManager,
+		db:                db,
+		jwtManager:        jwtManager,
+		accessTokenExpiry: accessTokenExpiry,
 	}
 }
 
@@ -36,8 +37,8 @@ type RegisterRequest struct {
 	Phone        string    `json:"phone"`
 	Gender       string    `json:"gender"`
 	Role         string    `json:"role"` // defaults to 'student' if empty
-	UniversityID uuid.UUID `json:"university_id"`
-	DepartmentID uuid.UUID `json:"department_id"`
+	UniversityID *uuid.UUID `json:"university_id"`
+	DepartmentID *uuid.UUID `json:"department_id"`
 }
 
 // LoginRequest represents a login request
@@ -140,7 +141,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		User:         user,
-		ExpiresIn:    int64(15 * time.Minute / time.Second), // 15 minutes in seconds
+		ExpiresIn:    int64(h.accessTokenExpiry * 60), // minutes -> seconds
 	})
 }
 
@@ -208,7 +209,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		User:         user,
-		ExpiresIn:    int64(15 * time.Minute / time.Second),
+		ExpiresIn:    int64(h.accessTokenExpiry * 60),
 	})
 }
 
@@ -265,7 +266,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"access_token": accessToken,
-		"expires_in":   int64(15 * time.Minute / time.Second),
+		"expires_in":   int64(h.accessTokenExpiry * 60),
 	})
 }
 

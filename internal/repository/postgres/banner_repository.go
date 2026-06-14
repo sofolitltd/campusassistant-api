@@ -38,7 +38,7 @@ func (r *bannerRepository) GetAll(ctx context.Context, filter map[string]interfa
 			Where("start_at <= ? AND end_at >= ?", now, now)
 
 		// TARGETING:
-		// 1. Scope is Global
+		// 1. Scope is National
 		// 2. OR matches specific university/department targets
 		uniID, hasUni := filter["university_id"]
 		deptID, hasDept := filter["department_id"]
@@ -59,12 +59,12 @@ func (r *bannerRepository) GetAll(ctx context.Context, filter map[string]interfa
 
 		if applyTargeting {
 			db = db.Where(
-				r.db.Where("target_scope = ?", "Global").
+				r.db.Where("target_scope = ?", "National").
 					Or("id IN (?)", subQuery.Select("banner_id")),
 			)
 		} else {
-			// Guest or no data provided? Show only Global
-			db = db.Where("target_scope = ?", "Global")
+			// Guest or no data provided? Show only National
+			db = db.Where("target_scope = ?", "National")
 		}
 
 		// Standard filter fields should be removed from map

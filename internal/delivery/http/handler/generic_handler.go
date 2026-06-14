@@ -78,7 +78,7 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 	filter := make(map[string]interface{})
 
 	// Add filters
-	uuidFilters := []string{"university_id", "department_id", "session_id", "user_id", "uploader_id", "semester_id", "course_category_id", "batch_id"}
+	uuidFilters := []string{"university_id", "department_id", "session_id", "user_id", "uploader_id", "semester_id", "course_category_id", "batch_id", "student_profile_id", "organization_id"}
 	for _, f := range uuidFilters {
 		if val := c.Query(f); val != "" {
 			filter[f] = val
@@ -86,7 +86,7 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 	}
 
 	// Add string filters
-	stringFilters := []string{"course_year", "course_category", "course_code", "name", "slug", "mode", "type", "status", "batch", "year", "blood_group", "scope", "category"}
+	stringFilters := []string{"course_year", "course_category", "course_code", "name", "slug", "mode", "type", "club_type", "status", "batch", "year", "blood_group", "scope", "category", "target_scope"}
 	for _, f := range stringFilters {
 		if val := c.Query(f); val != "" {
 			filter[f] = val
@@ -108,6 +108,9 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 	}
 
 	if includeDetails := c.Query("include_details"); includeDetails == "true" {
+		filter["preload"] = true
+	}
+	if preload := c.Query("preload"); preload == "true" {
 		filter["preload"] = true
 	}
 
@@ -136,19 +139,18 @@ func (h *GenericHandler[T]) Update(c *gin.Context) {
 		return
 	}
 
-	var entity T
-	if err := c.ShouldBindJSON(&entity); err != nil {
+	existing, err := h.Usecase.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+		return
+	}
+
+	if err := c.ShouldBindJSON(existing); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Set ID if supported
-	if setter, ok := any(&entity).(domain.Entity); ok {
-		setter.SetID(id)
-	}
-
-	// Set Audit fields if supported and user_id exists
-	if auditable, ok := any(&entity).(domain.Auditable); ok {
+	if auditable, ok := any(existing).(domain.Auditable); ok {
 		if userID, exists := c.Get("user_id"); exists {
 			if id, ok := userID.(uuid.UUID); ok {
 				auditable.SetUpdatedBy(id)
@@ -156,12 +158,12 @@ func (h *GenericHandler[T]) Update(c *gin.Context) {
 		}
 	}
 
-	if err := h.Usecase.Update(c.Request.Context(), &entity); err != nil {
+	if err := h.Usecase.Update(c.Request.Context(), existing); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, entity)
+	c.JSON(http.StatusOK, existing)
 }
 
 func (h *GenericHandler[T]) Delete(c *gin.Context) {

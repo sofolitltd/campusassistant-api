@@ -16,7 +16,7 @@ type Banner struct {
 	IsActive    bool           `gorm:"default:true" json:"is_active"`
 	StartAt     time.Time      `json:"start_at"`
 	EndAt       time.Time      `json:"end_at"`
-	TargetScope string         `gorm:"size:20;not null" json:"target_scope"` // Global, University, Department
+	TargetScope string         `gorm:"size:20;not null" json:"target_scope"` // National, University, Department
 	Targets     []BannerTarget `gorm:"foreignKey:BannerID;constraint:OnDelete:CASCADE" json:"targets,omitempty"`
 }
 

@@ -191,8 +191,69 @@ X-API-Key: {{apiKey}}
 
 {
     "university_id": "{{universityId}}",
-    "route_name": "Campus - City Gate",
-    "bus_number": "Bus 05",
-    "schedule": "Departs at 8:00 AM",
-    "driver_contact": "0123456789"
+    "title": "Campus to City Gate Route",
+    "image": "https://example.com/bus-schedule-image.png",
+    "time": "Departs at 8:00 AM"
 }
+
+### 11. Clubs
+# @name createClubUniversity
+POST {{baseUrl}}/clubs
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "name": "CU IT Society",
+    "description": "The official IT and technology club of the University of Chittagong. Organizes workshops, hackathons, and tech talks.",
+    "club_type": "university",
+    "university_id": "{{universityId}}",
+    "is_active": true,
+    "social_links": {
+        "facebook": "https://facebook.com/cuitsociety",
+        "website": "https://cuits.org"
+    },
+    "contact_email": "cuits@cu.ac.bd",
+    "founded_year": 2015
+}
+
+### @name createClubDepartment
+POST {{baseUrl}}/clubs
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "name": "Psychology Forum",
+    "description": "A departmental club for psychology students to discuss research, share resources, and organize seminars.",
+    "club_type": "department",
+    "university_id": "{{universityId}}",
+    "department_id": "{{departmentId}}",
+    "is_active": true,
+    "social_links": {
+        "facebook": "https://facebook.com/psyforumcu"
+    },
+    "founded_year": 2018
+}
+
+### @name createClubDepartment2
+POST {{baseUrl}}/clubs
+Content-Type: application/json
+X-API-Key: {{apiKey}}
+
+{
+    "name": "CU Debate Club",
+    "description": "Home of competitive debating at the University of Chittagong. Trains students for national and international debate tournaments.",
+    "club_type": "university",
+    "university_id": "{{universityId}}",
+    "is_active": true,
+    "contact_email": "debate@cu.ac.bd",
+    "contact_phone": "+880-1234-567890",
+    "founded_year": 2000
+}
+
+### Get All Clubs
+GET {{baseUrl}}/clubs
+X-API-Key: {{apiKey}}
+
+### Get Clubs by university
+GET {{baseUrl}}/clubs?university_id={{universityId}}&club_type=university
+X-API-Key: {{apiKey}}

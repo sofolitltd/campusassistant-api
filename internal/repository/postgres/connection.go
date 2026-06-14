@@ -20,8 +20,8 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 	}
 
 	gormConfig := &gorm.Config{
-		Logger:                 logger.Default.LogMode(logger.Info),
-		PrepareStmt:            true,
+		Logger:                 logger.Default.LogMode(logger.Warn),
+		PrepareStmt:            false,
 		SkipDefaultTransaction: true,
 	}
 
@@ -56,6 +56,30 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 func RunMigrations(db *gorm.DB) error {
 	log.Println("[MIGRATION] Starting database migrations...")
 	
+	// Fix for subscription_plans.duration_days NOT NULL constraint error
+	// If the column exists, update null values to a default (e.g., 30) before GORM tries to make it NOT NULL
+	if db.Migrator().HasTable(&domain.SubscriptionPlan{}) {
+		if db.Migrator().HasColumn(&domain.SubscriptionPlan{}, "duration_days") {
+			db.Model(&domain.SubscriptionPlan{}).Where("duration_days IS NULL").Update("duration_days", 30)
+		}
+	}
+
+	// Clean up legacy columns for Transport
+	if db.Migrator().HasTable("transports") {
+		for _, col := range []string{"route_name", "bus_number", "schedule", "driver_contact"} {
+			if db.Migrator().HasColumn("transports", col) {
+				db.Migrator().DropColumn("transports", col)
+			}
+		}
+		// If "title" column does not exist yet, it will be added by AutoMigrate.
+		// If there are existing rows, they will have NULL in "title", causing constraint failure.
+		// To prevent this, we delete all rows from transports if "title" column is missing.
+		if !db.Migrator().HasColumn("transports", "title") {
+			log.Println("[MIGRATION] Dropping legacy rows from transports to avoid NOT NULL constraint errors")
+			db.Exec("DELETE FROM transports")
+		}
+	}
+
 	// AutoMigrate all models
 	err := db.AutoMigrate(
 		&domain.University{},
@@ -75,9 +99,10 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.AuditLog{},
 		&domain.Notification{},
 		&domain.SubscriptionPlan{},
-		&domain.ProFeature{},
+		&domain.SubscriptionTarget{},
 		&domain.UserSubscription{},
 		&domain.Routine{},
+		&domain.Organization{},
 		&domain.Alumni{},
 		&domain.Bookmark{},
 		&domain.CourseCategory{},
@@ -88,9 +113,24 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.BannerTarget{},
 		&domain.Chapter{},
 		&domain.EmergencyContact{},
+		&domain.ContactTarget{},
+		&domain.CommunityPost{},
+		&domain.CommunityComment{},
+		&domain.CommunityPostLike{},
+		&domain.CommunityCommentLike{},
+		&domain.Club{},
+		&domain.Conversation{},
+		&domain.ConversationParticipant{},
+		&domain.Message{},
+		&domain.UserDeletedMessage{},
 	)
 	if err != nil {
 		return fmt.Errorf("AutoMigrate failed: %w", err)
+	}
+
+	// Drop legacy columns from earlier schema iterations
+	if db.Migrator().HasColumn(&domain.Message{}, "deleted_by_user") {
+		db.Migrator().DropColumn(&domain.Message{}, "deleted_by_user")
 	}
 
 	// Cleanup legacy tables
@@ -99,6 +139,17 @@ func RunMigrations(db *gorm.DB) error {
 		if db.Migrator().HasTable(table) {
 			db.Migrator().DropTable(table)
 		}
+	}
+
+	// Drop legacy columns from modernized tables to prevent NOT NULL constraint errors
+	if db.Migrator().HasColumn("contacts", "scope") {
+		db.Migrator().DropColumn("contacts", "scope")
+	}
+	if db.Migrator().HasColumn("contacts", "university_id") {
+		db.Migrator().DropColumn("contacts", "university_id")
+	}
+	if db.Migrator().HasColumn("contacts", "department_id") {
+		db.Migrator().DropColumn("contacts", "department_id")
 	}
 
 	log.Println("[MIGRATION] Database migrations completed successfully")
