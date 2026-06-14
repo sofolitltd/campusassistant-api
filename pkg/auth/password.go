@@ -10,7 +10,7 @@ const (
 	// MinPasswordLength is the minimum allowed password length
 	MinPasswordLength = 8
 	// BcryptCost is the cost factor for bcrypt hashing (10 is default, 12 is more secure but slower)
-	BcryptCost = 12
+	BcryptCost = 10
 )
 
 var (
