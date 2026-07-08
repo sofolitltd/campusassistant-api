@@ -3,6 +3,7 @@ package postgres
 import (
 	"campusassistant-api/internal/domain"
 	"context"
+	"fmt"
 
 	"gorm.io/gorm"
 )
@@ -46,20 +47,35 @@ func (r *courseRepository) Update(ctx context.Context, entity *domain.Course) er
 	entity.BatchIDs = nil
 	entity.Batches = nil
 
+	// DEBUG
+	fmt.Printf("[DEBUG courseRepo.Update] CourseID=%s BatchIDs=%#v (len=%d)\n",
+		entity.ID, batchIDs, len(batchIDs))
+	fmt.Printf("[DEBUG courseRepo.Update] batchIDs == nil? %v\n", batchIDs == nil)
+
 	if err := r.db.WithContext(ctx).Save(entity).Error; err != nil {
+		fmt.Printf("[DEBUG courseRepo.Update] Save ERROR: %v\n", err)
 		return err
 	}
+	fmt.Printf("[DEBUG courseRepo.Update] Save OK\n")
 
 	if batchIDs != nil {
 		var batches []domain.Batch
 		if len(batchIDs) > 0 {
 			if err := r.db.Where("id IN ?", batchIDs).Find(&batches).Error; err != nil {
+				fmt.Printf("[DEBUG courseRepo.Update] Find batches ERROR: %v\n", err)
 				return err
 			}
+			fmt.Printf("[DEBUG courseRepo.Update] Found %d batches by IDs\n", len(batches))
+		} else {
+			fmt.Printf("[DEBUG courseRepo.Update] batchIDs is empty slice — clearing all batches\n")
 		}
 		if err := r.db.Model(entity).Association("Batches").Replace(batches); err != nil {
+			fmt.Printf("[DEBUG courseRepo.Update] Replace ERROR: %v\n", err)
 			return err
 		}
+		fmt.Printf("[DEBUG courseRepo.Update] Replace OK — %d batches assigned\n", len(batches))
+	} else {
+		fmt.Printf("[DEBUG courseRepo.Update] batchIDs is nil — skipping batch update\n")
 	}
 
 	return nil

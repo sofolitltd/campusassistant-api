@@ -19,6 +19,52 @@ func NewResourceRepository(db *gorm.DB) domain.Repository[domain.Resource] {
 	}
 }
 
+func (r *resourceRepository) Create(ctx context.Context, entity *domain.Resource) error {
+	batchIDs := entity.BatchIDs
+	entity.BatchIDs = nil
+	entity.Batches = nil
+
+	if err := r.db.WithContext(ctx).Create(entity).Error; err != nil {
+		return err
+	}
+
+	if len(batchIDs) > 0 {
+		var batches []domain.Batch
+		if err := r.db.Where("id IN ?", batchIDs).Find(&batches).Error; err != nil {
+			return err
+		}
+		if err := r.db.Model(entity).Association("Batches").Replace(batches); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (r *resourceRepository) Update(ctx context.Context, entity *domain.Resource) error {
+	batchIDs := entity.BatchIDs
+	entity.BatchIDs = nil
+	entity.Batches = nil
+
+	if err := r.db.WithContext(ctx).Save(entity).Error; err != nil {
+		return err
+	}
+
+	if batchIDs != nil {
+		var batches []domain.Batch
+		if len(batchIDs) > 0 {
+			if err := r.db.Where("id IN ?", batchIDs).Find(&batches).Error; err != nil {
+				return err
+			}
+		}
+		if err := r.db.Model(entity).Association("Batches").Replace(batches); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]interface{}, limit, offset int) ([]domain.Resource, int64, error) {
 	var entities []domain.Resource
 	var count int64

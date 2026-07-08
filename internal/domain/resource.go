@@ -79,7 +79,8 @@ type Resource struct {
 
 	// Complex Metadata (kept for backward compat with Years in question banks)
 	Years   *datatypes.JSON `gorm:"type:jsonb" json:"years,omitempty"` // For Questions e.g. [2016, 2017]
-	Batches []Batch         `gorm:"many2many:resource_batches;save_associations:false" json:"batches,omitempty"`
+	BatchIDs []string `gorm:"-" json:"batch_ids,omitempty"`
+	Batches  []Batch  `gorm:"many2many:resource_batches;save_associations:false" json:"batches,omitempty"`
 
 	// TODO: FCM notification fields — add when notification service is ready
 	// NotifyOnApproval bool  — flag to send push to uploader on status change
