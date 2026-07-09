@@ -2,7 +2,7 @@ run:
 	go run ./cmd/api/main.go
 
 build:
-	go build -o campusassistant-api ./cmd/api/main.go
+	GOOS=linux GOARCH=amd64 go build -o campusassistant-api ./cmd/api/main.go
 
 
 reset-db:
