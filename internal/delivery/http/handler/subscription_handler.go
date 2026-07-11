@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"campusassistant-api/internal/domain"
 
@@ -90,12 +91,14 @@ func (h *SubscriptionHandler) DeletePlan(c *gin.Context) {
 }
 
 func (h *SubscriptionHandler) GetAllSubscriptions(c *gin.Context) {
-	subs, err := h.repo.GetAllSubscriptions(c.Request.Context())
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	subs, count, err := h.repo.GetAllSubscriptions(c.Request.Context(), offset, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch subscriptions"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": subs})
+	c.JSON(http.StatusOK, gin.H{"data": subs, "count": count, "offset": offset, "limit": limit})
 }
 
 func (h *SubscriptionHandler) CreateSubscription(c *gin.Context) {

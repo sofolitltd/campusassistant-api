@@ -78,7 +78,7 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 	filter := make(map[string]interface{})
 
 	// Add filters
-	uuidFilters := []string{"university_id", "department_id", "session_id", "user_id", "uploader_id", "semester_id", "course_category_id", "batch_id", "student_profile_id", "organization_id"}
+	uuidFilters := []string{"university_id", "department_id", "session_id", "user_id", "uploader_id", "level_id", "course_category_id", "batch_id", "student_profile_id", "organization_id"}
 	for _, f := range uuidFilters {
 		if val := c.Query(f); val != "" {
 			filter[f] = val

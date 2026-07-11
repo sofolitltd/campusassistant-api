@@ -90,10 +90,18 @@ func (r *subscriptionRepository) DeletePlan(ctx context.Context, id uuid.UUID) e
 	return r.db.WithContext(ctx).Delete(&domain.SubscriptionPlan{}, id).Error
 }
 
-func (r *subscriptionRepository) GetAllSubscriptions(ctx context.Context) ([]domain.UserSubscription, error) {
+func (r *subscriptionRepository) GetAllSubscriptions(ctx context.Context, offset, limit int) ([]domain.UserSubscription, int64, error) {
 	var subs []domain.UserSubscription
-	err := r.db.WithContext(ctx).Preload("User").Order("created_at desc").Find(&subs).Error
-	return subs, err
+	var count int64
+	r.db.WithContext(ctx).Model(&domain.UserSubscription{}).Count(&count)
+	err := r.db.WithContext(ctx).
+		Preload("User").
+		Select("user_subscriptions.*, COALESCE(subscription_plans.price, 0) as price").
+		Joins("LEFT JOIN subscription_plans ON subscription_plans.id = user_subscriptions.plan_id").
+		Order("user_subscriptions.created_at desc").
+		Offset(offset).Limit(limit).
+		Find(&subs).Error
+	return subs, count, err
 }
 
 func (r *subscriptionRepository) ExpireSubscriptions(ctx context.Context) (int64, error) {

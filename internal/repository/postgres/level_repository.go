@@ -7,23 +7,23 @@ import (
 	"gorm.io/gorm"
 )
 
-type semesterRepository struct {
-	domain.Repository[domain.Semester]
+type levelRepository struct {
+	domain.Repository[domain.Level]
 	db *gorm.DB
 }
 
-func NewSemesterRepository(db *gorm.DB) domain.Repository[domain.Semester] {
-	return &semesterRepository{
-		Repository: NewGormRepository[domain.Semester](db),
+func NewLevelRepository(db *gorm.DB) domain.Repository[domain.Level] {
+	return &levelRepository{
+		Repository: NewGormRepository[domain.Level](db),
 		db:         db,
 	}
 }
 
-func (r *semesterRepository) GetAll(ctx context.Context, filter map[string]interface{}, limit, offset int) ([]domain.Semester, int64, error) {
-	var entities []domain.Semester
+func (r *levelRepository) GetAll(ctx context.Context, filter map[string]interface{}, limit, offset int) ([]domain.Level, int64, error) {
+	var entities []domain.Level
 	var count int64
 
-	db := r.db.WithContext(ctx).Model(&domain.Semester{})
+	db := r.db.WithContext(ctx).Model(&domain.Level{})
 
 	// Handle Batch Filtering
 	batchID, hasBatchID := filter["batch_id"]
@@ -31,9 +31,9 @@ func (r *semesterRepository) GetAll(ctx context.Context, filter map[string]inter
 
 	// Handle Batch Filtering via subquery for cleaner DISTINCT handling in COUNT
 	if hasBatchID || hasBatchName {
-		sub := r.db.Table("semester_batches sb").
-			Select("sb.semester_id").
-			Joins("JOIN batches b ON b.id = sb.batch_id")
+		sub := r.db.Table("level_batches lb").
+			Select("lb.level_id").
+			Joins("JOIN batches b ON b.id = lb.batch_id")
 
 		if hasBatchID && batchID != "" {
 			sub = sub.Where("b.id = ?", batchID)
@@ -43,16 +43,16 @@ func (r *semesterRepository) GetAll(ctx context.Context, filter map[string]inter
 			sub = sub.Where("b.name = ?", batchName)
 			delete(filter, "batch")
 		}
-		db = db.Where("semesters.id IN (?)", sub)
+		db = db.Where("levels.id IN (?)", sub)
 	}
 
 	// Apply other filters
 	for key, value := range filter {
 		if key == "search" {
 			searchVal := "%" + value.(string) + "%"
-			db = db.Where("semesters.name ILIKE ?", searchVal)
+			db = db.Where("levels.name ILIKE ?", searchVal)
 		} else {
-			db = db.Where("semesters."+key+" = ?", value)
+			db = db.Where("levels."+key+" = ?", value)
 		}
 	}
 
@@ -60,7 +60,7 @@ func (r *semesterRepository) GetAll(ctx context.Context, filter map[string]inter
 		return nil, 0, err
 	}
 
-	err := db.Preload("Batches").Limit(limit).Offset(offset).Find(&entities).Error
+	err := db.Order("\"order\" desc").Preload("Batches").Limit(limit).Offset(offset).Find(&entities).Error
 	if err != nil {
 		return nil, 0, err
 	}

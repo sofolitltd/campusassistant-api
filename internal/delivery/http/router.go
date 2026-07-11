@@ -140,16 +140,16 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	registerRoutes[domain.Transport](v1, db, "transports")
 	registerRoutes[domain.Attachment](v1, db, "attachments")
 
-	semesterRepo := postgres.NewSemesterRepository(db)
-	semesterUsecase := usecase.NewGenericUsecase[domain.Semester](semesterRepo)
-	semesterHandler := handler.NewGenericHandler[domain.Semester](semesterUsecase)
-	sg := v1.Group("/semesters")
+	levelRepo := postgres.NewLevelRepository(db)
+	levelUsecase := usecase.NewGenericUsecase[domain.Level](levelRepo)
+	levelHandler := handler.NewGenericHandler[domain.Level](levelUsecase)
+	lg := v1.Group("/levels")
 	{
-		sg.POST("", semesterHandler.Create)
-		sg.GET("", semesterHandler.GetAll)
-		sg.GET("/:id", semesterHandler.GetByID)
-		sg.PUT("/:id", semesterHandler.Update)
-		sg.DELETE("/:id", semesterHandler.Delete)
+		lg.POST("", levelHandler.Create)
+		lg.GET("", levelHandler.GetAll)
+		lg.GET("/:id", levelHandler.GetByID)
+		lg.PUT("/:id", levelHandler.Update)
+		lg.DELETE("/:id", levelHandler.Delete)
 	}
 
 	registerRoutes[domain.Hall](v1, db, "halls")

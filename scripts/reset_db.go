@@ -38,7 +38,7 @@ func main() {
 		&domain.Teacher{},
 		&domain.Staff{},
 		&domain.Batch{},
-		&domain.Semester{},
+		&domain.Level{},
 		&domain.Hall{},
 		&domain.Session{},
 		&domain.User{},

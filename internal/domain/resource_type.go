@@ -9,4 +9,5 @@ const (
 	TypeSyllabus ResourceType = "syllabus"
 	TypeBook     ResourceType = "book"
 	TypeVideo    ResourceType = "video"
+	TypeResearch ResourceType = "research"
 )

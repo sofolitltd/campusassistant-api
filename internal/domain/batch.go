@@ -12,6 +12,6 @@ type Batch struct {
 	Department   *Department `json:"department,omitempty"`
 	UniversityID uuid.UUID   `gorm:"type:uuid;not null;index" json:"university_id"`
 	Sessions     []Session   `gorm:"many2many:batch_sessions;" json:"sessions,omitempty"`
-	Semesters    []Semester  `gorm:"many2many:semester_batches;" json:"semesters,omitempty"`
+	Levels       []Level     `gorm:"many2many:level_batches;" json:"levels,omitempty"`
 	Students     []Student   `gorm:"foreignKey:BatchID" json:"students,omitempty"`
 }

@@ -107,7 +107,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.Bookmark{},
 		&domain.CourseCategory{},
 		&domain.CoursePrefix{},
-		&domain.Semester{},
+		&domain.Level{},
 		&domain.Course{},
 		&domain.Banner{},
 		&domain.BannerTarget{},

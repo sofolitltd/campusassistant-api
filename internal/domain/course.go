@@ -5,7 +5,7 @@ import (
 )
 
 // Course represents a subject or course offered by a department.
-// It uses FK references to CourseCategory and Semester so renaming
+// It uses FK references to CourseCategory and Level so renaming
 // those entities never breaks existing course data.
 type Course struct {
 	Base
@@ -24,10 +24,10 @@ type Course struct {
 	CourseCategoryID *uuid.UUID      `gorm:"type:uuid;index" json:"course_category_id"`
 	CourseCategory   *CourseCategory `gorm:"foreignKey:CourseCategoryID" json:"course_category,omitempty"`
 
-	// SemesterID stores the UUID of the Semester (academic year/term).
-	// The joined Semester object is returned in the API response.
-	SemesterID *uuid.UUID `gorm:"type:uuid;index" json:"semester_id"`
-	Semester   *Semester  `gorm:"foreignKey:SemesterID" json:"semester,omitempty"`
+	// LevelID stores the UUID of the Level (academic year/term).
+	// The joined Level object is returned in the API response.
+	LevelID *uuid.UUID `gorm:"type:uuid;index" json:"level_id"`
+	Level   *Level     `gorm:"foreignKey:LevelID" json:"level,omitempty"`
 
 	BatchIDs []string `gorm:"-" json:"batch_ids,omitempty"`
 	Batches  []Batch  `gorm:"many2many:course_batches;" json:"batches,omitempty"`

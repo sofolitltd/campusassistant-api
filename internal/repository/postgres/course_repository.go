@@ -113,8 +113,8 @@ func (r *courseRepository) GetAll(ctx context.Context, filter map[string]interfa
 		if key == "search" {
 			searchVal := "%" + value.(string) + "%"
 			db = db.Where("courses.course_title ILIKE ? OR courses.course_code ILIKE ?", searchVal, searchVal)
-		} else if key == "semester_id" {
-			db = db.Where("courses.semester_id = ?", value)
+		} else if key == "level_id" {
+			db = db.Where("courses.level_id = ?", value)
 		} else {
 			db = db.Where("courses."+key+" = ?", value)
 		}
@@ -124,7 +124,7 @@ func (r *courseRepository) GetAll(ctx context.Context, filter map[string]interfa
 		return nil, 0, err
 	}
 
-	err := db.Preload("Batches").Preload("CourseCategory").Preload("Semester").Limit(limit).Offset(offset).Find(&entities).Error
+	err := db.Order("course_code asc").Preload("Batches").Preload("CourseCategory").Preload("Level").Limit(limit).Offset(offset).Find(&entities).Error
 	if err != nil {
 		return nil, 0, err
 	}
