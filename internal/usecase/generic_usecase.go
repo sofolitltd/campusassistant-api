@@ -14,6 +14,7 @@ type Usecase[T any] interface {
 	GetAll(ctx context.Context, filter map[string]interface{}, limit, offset int) ([]T, int64, error)
 	Update(ctx context.Context, entity *T) error
 	Delete(ctx context.Context, id uuid.UUID) error
+	HardDelete(ctx context.Context, id uuid.UUID) error
 }
 
 type genericUsecase[T any] struct {
@@ -43,4 +44,8 @@ func (u *genericUsecase[T]) Update(ctx context.Context, entity *T) error {
 
 func (u *genericUsecase[T]) Delete(ctx context.Context, id uuid.UUID) error {
 	return u.repo.Delete(ctx, id)
+}
+
+func (u *genericUsecase[T]) HardDelete(ctx context.Context, id uuid.UUID) error {
+	return u.repo.HardDelete(ctx, id)
 }

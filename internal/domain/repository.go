@@ -13,6 +13,7 @@ type Repository[T any] interface {
 	GetAll(ctx context.Context, filter map[string]interface{}, limit, offset int) ([]T, int64, error)
 	Update(ctx context.Context, entity *T) error
 	Delete(ctx context.Context, id uuid.UUID) error
+	HardDelete(ctx context.Context, id uuid.UUID) error
 	// Additional flexible query methods could be added here
 }
 

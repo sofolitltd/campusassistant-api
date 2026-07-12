@@ -12,11 +12,16 @@ import (
 )
 
 type GormRepository[T any] struct {
-	DB *gorm.DB
+	DB           *gorm.DB
+	defaultOrder string
 }
 
 func NewGormRepository[T any](db *gorm.DB) domain.Repository[T] {
 	return &GormRepository[T]{DB: db}
+}
+
+func NewGormRepositoryWithOrder[T any](db *gorm.DB, order string) domain.Repository[T] {
+	return &GormRepository[T]{DB: db, defaultOrder: order}
 }
 
 func (r *GormRepository[T]) Create(ctx context.Context, entity *T) error {
@@ -181,7 +186,11 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 		db = db.Preload("Targets")
 	}
 
-	err := db.Limit(limit).Offset(offset).Find(&entities).Error
+	q := db.Limit(limit).Offset(offset)
+	if r.defaultOrder != "" {
+		q = q.Order(r.defaultOrder)
+	}
+	err := q.Find(&entities).Error
 	if err != nil {
 		return nil, 0, err
 	}
@@ -262,7 +271,11 @@ func (r *GormRepository[T]) Update(ctx context.Context, entity *T) error {
 }
 
 func (r *GormRepository[T]) Delete(ctx context.Context, id uuid.UUID) error {
-	// Hard delete or Soft delete? GORM defaults to soft delete if DeletedAt is present.
-	// We want soft delete as per our Base struct.
+	// Soft delete: GORM sets deleted_at if DeletedAt field is present in the model.
 	return r.DB.WithContext(ctx).Delete(new(T), "id = ?", id).Error
+}
+
+func (r *GormRepository[T]) HardDelete(ctx context.Context, id uuid.UUID) error {
+	// Permanently remove the row from the DB, bypassing soft-delete.
+	return r.DB.WithContext(ctx).Unscoped().Delete(new(T), "id = ?", id).Error
 }

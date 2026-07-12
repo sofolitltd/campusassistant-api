@@ -91,7 +91,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	registerRoutes[domain.User](v1, db, "users")
 
 	// Specialized Student Routes
-	studentRepo := postgres.NewGormRepository[domain.Student](db)
+	studentRepo := postgres.NewGormRepositoryWithOrder[domain.Student](db, "weight ASC, LEFT(student_id, 2) DESC, student_id ASC")
 	studentUsecase := usecase.NewGenericUsecase(studentRepo)
 	studentHandler := handler.NewStudentHandler(studentUsecase)
 	studentGroup := v1.Group("/students")
@@ -105,7 +105,17 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		studentGroup.DELETE("/:id", studentHandler.Delete)
 	}
 
-	registerRoutes[domain.Teacher](v1, db, "teachers")
+	teacherRepo := postgres.NewGormRepositoryWithOrder[domain.Teacher](db, "weight ASC, name ASC")
+	teacherUsecase := usecase.NewGenericUsecase(teacherRepo)
+	teacherHandler := handler.NewGenericHandler(teacherUsecase)
+	teacherGroup := v1.Group("/teachers")
+	{
+		teacherGroup.POST("", teacherHandler.Create)
+		teacherGroup.GET("", teacherHandler.GetAll)
+		teacherGroup.GET("/:id", teacherHandler.GetByID)
+		teacherGroup.PUT("/:id", teacherHandler.Update)
+		teacherGroup.DELETE("/:id", teacherHandler.Delete)
+	}
 	registerRoutes[domain.Staff](v1, db, "staffs")
 	crRepo := postgres.NewGormRepository[domain.CR](db)
 	crUsecase := usecase.NewGenericUsecase(crRepo)
@@ -120,9 +130,14 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 	registerRoutes[domain.Verification](v1, db, "verifications")
 
+	r2Storage, r2Err := storage.NewR2Storage(cfg)
 	resourceRepo := postgres.NewResourceRepository(db)
 	resourceUsecase := usecase.NewGenericUsecase(resourceRepo)
-	resourceHandler := handler.NewResourceHandler(resourceUsecase)
+	var r2 *storage.R2Storage
+	if r2Err == nil {
+		r2 = r2Storage
+	}
+	resourceHandler := handler.NewResourceHandler(resourceUsecase, r2)
 	rg := v1.Group("/resources")
 	{
 		rg.POST("", resourceHandler.Create)
@@ -206,9 +221,8 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	registerRoutes[domain.EmergencyContact](v1, db, "emergency-contacts")
 
 	// R2 Upload Routes
-	storage, err := storage.NewR2Storage(cfg)
-	if err == nil {
-		uploadHandler := handler.NewUploadHandler(db, storage)
+	if r2 != nil {
+		uploadHandler := handler.NewUploadHandler(db, r2)
 		v1.POST("/upload", uploadHandler.UploadImage)
 		v1.DELETE("/upload", uploadHandler.DeleteFile)
 		r.GET("/upload", uploadHandler.ShowUploadPage) // Serving the demo page at root /upload

@@ -48,6 +48,9 @@ type User struct {
 	DepartmentID *uuid.UUID  `gorm:"type:uuid;index" json:"department_id,omitempty"`
 	Department   *Department `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
 
+	// Academic Batch (populated from Student.Batch for convenience, not a DB column)
+	Batch string `gorm:"-" json:"batch"`
+
 	// Academic/Professional Profiles (Preloadable)
 	Student *Student `gorm:"foreignKey:UserID" json:"student,omitempty"`
 	Teacher *Teacher `gorm:"foreignKey:UserID" json:"teacher,omitempty"`

@@ -3,6 +3,7 @@ package handler
 import (
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/usecase"
+	"campusassistant-api/pkg/storage"
 	"net/http"
 	"time"
 
@@ -14,12 +15,60 @@ import (
 type ResourceHandler struct {
 	*GenericHandler[domain.Resource]
 	Usecase usecase.Usecase[domain.Resource]
+	storage *storage.R2Storage
 }
 
-func NewResourceHandler(u usecase.Usecase[domain.Resource]) *ResourceHandler {
+func NewResourceHandler(u usecase.Usecase[domain.Resource], s *storage.R2Storage) *ResourceHandler {
 	return &ResourceHandler{
 		GenericHandler: NewGenericHandler[domain.Resource](u),
 		Usecase:        u,
+		storage:        s,
+	}
+}
+
+// Delete handles both soft delete (default) and permanent delete (?permanent=true).
+// Permanent delete removes files from R2 and hard-deletes the DB row.
+// DELETE /resources/:id
+func (h *ResourceHandler) Delete(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID format"})
+		return
+	}
+
+	if c.Query("permanent") == "true" {
+		resource, err := h.Usecase.GetByID(c.Request.Context(), id)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
+			return
+		}
+
+		if h.storage != nil {
+			if resource.FileURL != "" {
+				if err := h.storage.DeleteFile(c.Request.Context(), resource.FileURL); err != nil {
+					c.Error(err)
+				}
+			}
+			if resource.ThumbnailURL != "" {
+				if err := h.storage.DeleteFile(c.Request.Context(), resource.ThumbnailURL); err != nil {
+					c.Error(err)
+				}
+			}
+		}
+
+		if err := h.Usecase.HardDelete(c.Request.Context(), id); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Permanently deleted"})
+	} else {
+		if err := h.Usecase.Delete(c.Request.Context(), id); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "Deleted successfully"})
 	}
 }
 
