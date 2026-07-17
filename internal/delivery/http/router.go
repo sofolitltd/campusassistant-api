@@ -170,7 +170,17 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	registerRoutes[domain.Hall](v1, db, "halls")
 	registerRoutes[domain.Organization](v1, db, "organizations")
 	registerRoutes[domain.Alumni](v1, db, "alumni")
-	registerRoutes[domain.Bookmark](v1, db, "bookmarks")
+	bookmarkRepo := postgres.NewGormRepository[domain.Bookmark](db)
+	bookmarkUc := usecase.NewGenericUsecase(bookmarkRepo)
+	bookmarkHandler := handler.NewGenericHandler[domain.Bookmark](bookmarkUc)
+	bg := v1.Group("/bookmarks")
+	{
+		bg.POST("", bookmarkHandler.Create)
+		bg.GET("", bookmarkHandler.GetAll)
+		bg.GET("/:id", bookmarkHandler.GetByID)
+		bg.PUT("/:id", bookmarkHandler.Update)
+		bg.DELETE("/:id", bookmarkHandler.HardDelete)
+	}
 	registerRoutes[domain.Routine](v1, db, "routines")
 
 	courseRepo := postgres.NewCourseRepository(db)
