@@ -261,14 +261,17 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	// Community Routes
 	communityRepo := postgres.NewCommunityRepository(db)
-	communityUsecase := usecase.NewCommunityUseCase(communityRepo)
-	communityHandler := handler.NewCommunityHandler(communityUsecase)
+	communityUsecase := usecase.NewCommunityUseCase(communityRepo, db)
+	communityHandler := handler.NewCommunityHandler(communityUsecase, r2, db)
 	communityGroup := v1.Group("/community")
 	communityGroup.Use(middleware.JWTMiddleware(jwtManager))
 	{
 		communityGroup.POST("/posts", communityHandler.CreatePost)
 		communityGroup.GET("/posts", communityHandler.GetPosts)
+		communityGroup.GET("/posts/liked", communityHandler.GetLikedPosts)
 		communityGroup.GET("/posts/saved", communityHandler.GetSavedPosts)
+		communityGroup.PUT("/posts/:id", communityHandler.UpdatePost)
+		communityGroup.DELETE("/posts/:id", communityHandler.DeletePost)
 		communityGroup.POST("/posts/:id/like", communityHandler.LikePost)
 		communityGroup.POST("/posts/:id/unlike", communityHandler.UnlikePost)
 		communityGroup.POST("/posts/:id/save", communityHandler.SavePost)

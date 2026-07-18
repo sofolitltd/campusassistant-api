@@ -152,6 +152,23 @@ func RunMigrations(db *gorm.DB) error {
 		db.Migrator().DropColumn("contacts", "department_id")
 	}
 
+	// Backfill organizational IDs on existing community posts (new columns
+	// start NULL). Derive from the author's student record so old posts show
+	// in the correct filtered feeds.
+	if db.Migrator().HasColumn(&domain.CommunityPost{}, "university_id") {
+		if err := db.Exec(`
+			UPDATE community_posts cp
+			SET university_id = s.university_id,
+			    department_id = s.department_id,
+			    batch_id      = s.batch_id
+			FROM students s
+			WHERE cp.author_id = s.user_id
+			  AND cp.university_id IS NULL
+		`).Error; err != nil {
+			log.Printf("[MIGRATION] community_posts backfill warning: %v", err)
+		}
+	}
+
 	log.Println("[MIGRATION] Database migrations completed successfully")
 	return nil
 }

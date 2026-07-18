@@ -6,21 +6,34 @@ import (
 	"campusassistant-api/internal/domain"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type communityUseCase struct {
 	repo domain.CommunityRepository
+	db   *gorm.DB
 }
 
-func NewCommunityUseCase(repo domain.CommunityRepository) domain.CommunityUseCase {
-	return &communityUseCase{repo: repo}
+func NewCommunityUseCase(repo domain.CommunityRepository, db *gorm.DB) domain.CommunityUseCase {
+	return &communityUseCase{repo: repo, db: db}
 }
 
-func (u *communityUseCase) CreatePost(ctx context.Context, authorID uuid.UUID, content string, scope domain.PostScope) (*domain.CommunityPost, error) {
+func (u *communityUseCase) CreatePost(ctx context.Context, authorID uuid.UUID, content string, scope domain.PostScope, imageURLs []string) (*domain.CommunityPost, error) {
+	// Capture the author's organizational context at post time for easy filtering.
+	var student domain.Student
 	post := &domain.CommunityPost{
-		Content:  content,
-		Scope:    scope,
-		AuthorID: authorID,
+		Content:   content,
+		Scope:     scope,
+		ImageURLs: imageURLs,
+		AuthorID:  authorID,
+	}
+	if err := u.db.WithContext(ctx).Where("user_id = ?", authorID).First(&student).Error; err == nil {
+		uni := student.UniversityID
+		dept := student.DepartmentID
+		batch := student.BatchID
+		post.UniversityID = &uni
+		post.DepartmentID = &dept
+		post.BatchID = &batch
 	}
 	post.SetCreatedBy(authorID)
 
@@ -30,21 +43,63 @@ func (u *communityUseCase) CreatePost(ctx context.Context, authorID uuid.UUID, c
 	return u.repo.GetPostByID(ctx, post.ID)
 }
 
-func (u *communityUseCase) GetPosts(ctx context.Context, userID uuid.UUID, scope domain.PostScope, page, pageSize int) ([]domain.CommunityPost, error) {
+func (u *communityUseCase) UpdatePost(ctx context.Context, authorID, postID uuid.UUID, content string) (*domain.CommunityPost, error) {
+	post, err := u.repo.GetPostByID(ctx, postID)
+	if err != nil {
+		return nil, err
+	}
+	if post.AuthorID != authorID {
+		return nil, domain.ErrUnauthorized
+	}
+	post.Content = content
+	if err := u.repo.UpdatePost(ctx, post); err != nil {
+		return nil, err
+	}
+	return u.repo.GetPostByID(ctx, postID)
+}
+
+func (u *communityUseCase) DeletePost(ctx context.Context, authorID, postID uuid.UUID) error {
+	post, err := u.repo.GetPostByID(ctx, postID)
+	if err != nil {
+		return err
+	}
+	if post.AuthorID != authorID {
+		return domain.ErrUnauthorized
+	}
+	return u.repo.DeletePost(ctx, postID)
+}
+
+func (u *communityUseCase) GetPosts(ctx context.Context, userID uuid.UUID, viewer domain.CommunityViewer, scope domain.PostScope, page, pageSize int) ([]domain.CommunityPost, error) {
 	if scope == domain.ScopeSaved {
 		return u.GetSavedPosts(ctx, userID, page, pageSize)
 	}
 
 	offset := (page - 1) * pageSize
-	posts, err := u.repo.GetPosts(ctx, scope, offset, pageSize)
+	posts, err := u.repo.GetPosts(ctx, scope, viewer, offset, pageSize)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check if user has liked each post
+	// Check if user has liked/saved each post (keyed by the real user ID).
 	for i := range posts {
 		liked, _ := u.repo.IsPostLikedByUser(ctx, posts[i].ID, userID)
 		posts[i].IsLiked = liked
+		saved, _ := u.repo.IsPostSavedByUser(ctx, posts[i].ID, userID)
+		posts[i].IsSaved = saved
+	}
+
+	return posts, nil
+}
+
+func (u *communityUseCase) GetLikedPosts(ctx context.Context, userID uuid.UUID, page, pageSize int) ([]domain.CommunityPost, error) {
+	offset := (page - 1) * pageSize
+	posts, err := u.repo.GetLikedPosts(ctx, userID, offset, pageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range posts {
+		posts[i].IsLiked = true // They are from the liked collection
 		saved, _ := u.repo.IsPostSavedByUser(ctx, posts[i].ID, userID)
 		posts[i].IsSaved = saved
 	}

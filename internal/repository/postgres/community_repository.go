@@ -21,20 +21,43 @@ func (r *communityRepository) CreatePost(ctx context.Context, post *domain.Commu
 	return r.db.WithContext(ctx).Create(post).Error
 }
 
-func (r *communityRepository) GetPosts(ctx context.Context, scope domain.PostScope, offset, limit int) ([]domain.CommunityPost, error) {
+func withAuthorStudent(db *gorm.DB) *gorm.DB {
+	return db.
+		Preload("Author").
+		Preload("Author.Student.University").
+		Preload("Author.Student.Department").
+		Preload("Author.Student.Batch").
+		Preload("Author.Student.Session")
+}
+
+func (r *communityRepository) GetPosts(ctx context.Context, scope domain.PostScope, viewer domain.CommunityViewer, offset, limit int) ([]domain.CommunityPost, error) {
 	posts := []domain.CommunityPost{}
-	err := r.db.WithContext(ctx).Where("scope = ?", scope).
-		Order("created_at desc").
+	db := withAuthorStudent(r.db.WithContext(ctx))
+
+	switch scope {
+	case domain.ScopeBatch:
+		db = db.Where("scope = ? AND batch_id = ?", domain.ScopeBatch, viewer.BatchID)
+	case domain.ScopeDepartment:
+		db = db.Where("scope = ? AND department_id = ?", domain.ScopeDepartment, viewer.DepartmentID)
+	case domain.ScopeUniversity:
+		db = db.Where("scope = ? AND university_id = ?", domain.ScopeUniversity, viewer.UniversityID)
+	case domain.ScopeAll:
+		// All = University-scope posts from other universities (exclude mine).
+		db = db.Where("scope = ? AND university_id IS NOT NULL AND university_id != ?", domain.ScopeUniversity, viewer.UniversityID)
+	default:
+		db = db.Where("scope = ?", scope)
+	}
+
+	err := db.Order("community_posts.created_at desc").
 		Offset(offset).
 		Limit(limit).
-		Preload("Author").
 		Find(&posts).Error
 	return posts, err
 }
 
 func (r *communityRepository) GetPostByID(ctx context.Context, id uuid.UUID) (*domain.CommunityPost, error) {
 	var post domain.CommunityPost
-	err := r.db.WithContext(ctx).Preload("Author").First(&post, "id = ?", id).Error
+	err := withAuthorStudent(r.db.WithContext(ctx)).First(&post, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +65,13 @@ func (r *communityRepository) GetPostByID(ctx context.Context, id uuid.UUID) (*d
 }
 
 func (r *communityRepository) DeletePost(ctx context.Context, id uuid.UUID) error {
-	return r.db.WithContext(ctx).Delete(&domain.CommunityPost{}, "id = ?", id).Error
+	return r.db.WithContext(ctx).Unscoped().Delete(&domain.CommunityPost{}, "id = ?", id).Error
+}
+
+func (r *communityRepository) UpdatePost(ctx context.Context, post *domain.CommunityPost) error {
+	return r.db.WithContext(ctx).Model(&domain.CommunityPost{}).
+		Where("id = ?", post.ID).
+		Update("content", post.Content).Error
 }
 
 func (r *communityRepository) SavePost(ctx context.Context, postID, userID uuid.UUID) error {
@@ -71,14 +100,26 @@ func (r *communityRepository) SavePost(ctx context.Context, postID, userID uuid.
 
 func (r *communityRepository) GetSavedPosts(ctx context.Context, userID uuid.UUID, offset, limit int) ([]domain.CommunityPost, error) {
 	posts := []domain.CommunityPost{}
-	err := r.db.WithContext(ctx).
+	err := withAuthorStudent(r.db.WithContext(ctx).
 		Table("community_posts").
 		Joins("JOIN bookmarks ON bookmarks.entity_id = community_posts.id").
-		Where("bookmarks.user_id = ? AND bookmarks.entity_type = ?", userID, "community_post").
+		Where("bookmarks.user_id = ? AND bookmarks.entity_type = ? AND bookmarks.deleted_at IS NULL", userID, "community_post").
 		Order("bookmarks.created_at desc").
 		Offset(offset).
-		Limit(limit).
-		Preload("Author").
+		Limit(limit)).
+		Find(&posts).Error
+	return posts, err
+}
+
+func (r *communityRepository) GetLikedPosts(ctx context.Context, userID uuid.UUID, offset, limit int) ([]domain.CommunityPost, error) {
+	posts := []domain.CommunityPost{}
+	err := withAuthorStudent(r.db.WithContext(ctx).
+		Table("community_posts").
+		Joins("JOIN community_post_likes ON community_post_likes.post_id = community_posts.id").
+		Where("community_post_likes.user_id = ?", userID).
+		Order("community_posts.created_at desc").
+		Offset(offset).
+		Limit(limit)).
 		Find(&posts).Error
 	return posts, err
 }
@@ -86,7 +127,7 @@ func (r *communityRepository) GetSavedPosts(ctx context.Context, userID uuid.UUI
 func (r *communityRepository) IsPostSavedByUser(ctx context.Context, postID, userID uuid.UUID) (bool, error) {
 	var count int64
 	err := r.db.WithContext(ctx).Table("bookmarks").
-		Where("user_id = ? AND entity_id = ? AND entity_type = ?", userID, postID, "community_post").
+		Where("user_id = ? AND entity_id = ? AND entity_type = ? AND deleted_at IS NULL", userID, postID, "community_post").
 		Count(&count).Error
 	return count > 0, err
 }
