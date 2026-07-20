@@ -82,6 +82,8 @@ type Resource struct {
 	BatchIDs []string `gorm:"-" json:"batch_ids,omitempty"`
 	Batches  []Batch  `gorm:"many2many:resource_batches;save_associations:false" json:"batches,omitempty"`
 
-	// TODO: FCM notification fields — add when notification service is ready
-	// NotifyOnApproval bool  — flag to send push to uploader on status change
+	// Notify controls whether creating/publishing this resource fans out a
+	// notification to its selected batches. Defaults to true when omitted
+	// (opt-out, not opt-in) — nil vs explicit false is why this is a pointer.
+	Notify *bool `gorm:"-" json:"notify,omitempty"`
 }

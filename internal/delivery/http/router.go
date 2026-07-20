@@ -7,6 +7,7 @@ import (
 	ws "campusassistant-api/internal/delivery/http/websocket"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/repository/postgres"
+	"campusassistant-api/internal/service"
 	"campusassistant-api/internal/usecase"
 	"campusassistant-api/pkg/auth"
 	"campusassistant-api/pkg/storage"
@@ -130,6 +131,8 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 	registerRoutes[domain.Verification](v1, db, "verifications")
 
+	notificationService := service.NewNotificationService(db)
+
 	r2Storage, r2Err := storage.NewR2Storage(cfg)
 	resourceRepo := postgres.NewResourceRepository(db)
 	resourceUsecase := usecase.NewGenericUsecase(resourceRepo)
@@ -137,7 +140,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	if r2Err == nil {
 		r2 = r2Storage
 	}
-	resourceHandler := handler.NewResourceHandler(resourceUsecase, r2)
+	resourceHandler := handler.NewResourceHandler(resourceUsecase, r2, db, notificationService)
 	rg := v1.Group("/resources")
 	{
 		rg.POST("", resourceHandler.Create)
@@ -282,6 +285,28 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		communityGroup.POST("/comments/:comment_id/unlike", communityHandler.UnlikeComment)
 		communityGroup.PUT("/comments/:comment_id", communityHandler.UpdateComment)
 		communityGroup.DELETE("/comments/:comment_id", communityHandler.DeleteComment)
+	}
+
+	// Notification Routes
+	notificationHandler := handler.NewNotificationHandler(db, notificationService)
+
+	// Admin notification endpoints — API key only (inherited from v1 group)
+	adminNotifGroup := v1.Group("/admin/notifications")
+	{
+		adminNotifGroup.GET("", notificationHandler.GetAllAdminNotifications)
+		adminNotifGroup.POST("", notificationHandler.CreateAdminNotification)
+		adminNotifGroup.DELETE("/:id", notificationHandler.DeleteAdminNotification)
+	}
+
+	// User-facing notification endpoints — require JWT
+	notifGroup := v1.Group("/notifications")
+	notifGroup.Use(middleware.JWTMiddleware(jwtManager))
+	{
+		notifGroup.GET("", notificationHandler.GetNotifications)
+		notifGroup.POST("", notificationHandler.CreateNotification)
+		notifGroup.POST("/:id/read", notificationHandler.MarkAsRead)
+		notifGroup.POST("/read-all", notificationHandler.MarkAllAsRead)
+		notifGroup.DELETE("/:id", notificationHandler.DeleteNotification)
 	}
 
 	// Chat Routes

@@ -15,12 +15,10 @@ const (
 	ScopeDepartment PostScope = "Department"
 	ScopeUniversity PostScope = "University"
 	ScopeSaved      PostScope = "Saved"
-	ScopeAll        PostScope = "All"
 )
 
 // CommunityViewer holds the requesting user's organizational context used to
-// scope feed queries (my batch / department / university, and "All" = other
-// universities).
+// scope feed queries (my batch / department / university).
 type CommunityViewer struct {
 	UniversityID uuid.UUID
 	DepartmentID uuid.UUID
@@ -39,8 +37,6 @@ func NormalizeScope(s string) PostScope {
 		return ScopeUniversity
 	case "saved":
 		return ScopeSaved
-	case "all":
-		return ScopeAll
 	default:
 		return PostScope(s)
 	}

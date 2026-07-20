@@ -41,9 +41,6 @@ func (r *communityRepository) GetPosts(ctx context.Context, scope domain.PostSco
 		db = db.Where("scope = ? AND department_id = ?", domain.ScopeDepartment, viewer.DepartmentID)
 	case domain.ScopeUniversity:
 		db = db.Where("scope = ? AND university_id = ?", domain.ScopeUniversity, viewer.UniversityID)
-	case domain.ScopeAll:
-		// All = University-scope posts from other universities (exclude mine).
-		db = db.Where("scope = ? AND university_id IS NOT NULL AND university_id != ?", domain.ScopeUniversity, viewer.UniversityID)
 	default:
 		db = db.Where("scope = ?", scope)
 	}
@@ -65,7 +62,12 @@ func (r *communityRepository) GetPostByID(ctx context.Context, id uuid.UUID) (*d
 }
 
 func (r *communityRepository) DeletePost(ctx context.Context, id uuid.UUID) error {
-	return r.db.WithContext(ctx).Unscoped().Delete(&domain.CommunityPost{}, "id = ?", id).Error
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("post_id = ?", id).Delete(&domain.CommunityComment{}).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Delete(&domain.CommunityPost{}, "id = ?", id).Error
+	})
 }
 
 func (r *communityRepository) UpdatePost(ctx context.Context, post *domain.CommunityPost) error {

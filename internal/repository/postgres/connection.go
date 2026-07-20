@@ -80,6 +80,14 @@ func RunMigrations(db *gorm.DB) error {
 		}
 	}
 
+	// Notifications moved from one-row-per-recipient to a content row + per-user
+	// recipient row. Drop the old shape so AutoMigrate recreates it cleanly —
+	// existing rows are disposable, there's no external system depending on them.
+	if db.Migrator().HasTable(&domain.Notification{}) && db.Migrator().HasColumn(&domain.Notification{}, "user_id") {
+		log.Println("[MIGRATION] Dropping legacy per-recipient notifications table")
+		db.Migrator().DropTable("notifications")
+	}
+
 	// AutoMigrate all models
 	err := db.AutoMigrate(
 		&domain.University{},
@@ -98,6 +106,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.Hall{},
 		&domain.AuditLog{},
 		&domain.Notification{},
+		&domain.NotificationRecipient{},
 		&domain.SubscriptionPlan{},
 		&domain.SubscriptionTarget{},
 		&domain.UserSubscription{},

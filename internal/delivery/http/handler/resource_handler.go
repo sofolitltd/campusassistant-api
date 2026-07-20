@@ -2,28 +2,115 @@ package handler
 
 import (
 	"campusassistant-api/internal/domain"
+	"campusassistant-api/internal/service"
 	"campusassistant-api/internal/usecase"
 	"campusassistant-api/pkg/storage"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 // ResourceHandler adds review-specific actions on top of GenericHandler.
 type ResourceHandler struct {
 	*GenericHandler[domain.Resource]
-	Usecase usecase.Usecase[domain.Resource]
-	storage *storage.R2Storage
+	Usecase             usecase.Usecase[domain.Resource]
+	storage             *storage.R2Storage
+	db                  *gorm.DB
+	notificationService *service.NotificationService
 }
 
-func NewResourceHandler(u usecase.Usecase[domain.Resource], s *storage.R2Storage) *ResourceHandler {
+func NewResourceHandler(u usecase.Usecase[domain.Resource], s *storage.R2Storage, db *gorm.DB, notificationService *service.NotificationService) *ResourceHandler {
 	return &ResourceHandler{
-		GenericHandler: NewGenericHandler[domain.Resource](u),
-		Usecase:        u,
-		storage:        s,
+		GenericHandler:      NewGenericHandler[domain.Resource](u),
+		Usecase:             u,
+		storage:             s,
+		db:                  db,
+		notificationService: notificationService,
 	}
+}
+
+// Create binds and persists a resource, then (unless opted out via Notify=false)
+// notifies its selected batches once it's actually published. Shadows the
+// embedded GenericHandler.Create so the notification side effect can hook in
+// without changing that generic bind/audit/respond contract for other entities.
+func (h *ResourceHandler) Create(c *gin.Context) {
+	var resource domain.Resource
+	if err := c.ShouldBindJSON(&resource); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	var adminID uuid.UUID
+	if userID, exists := c.Get("user_id"); exists {
+		if uid, ok := userID.(uuid.UUID); ok {
+			adminID = uid
+		}
+	}
+	resource.CreatedByID = adminID
+	resource.UpdatedByID = adminID
+
+	// Capture batch IDs before Create — resourceRepository.Create nils out
+	// entity.BatchIDs on the same pointer as a side effect once it's used them
+	// to populate the resource_batches association.
+	notify := resource.Notify == nil || *resource.Notify
+	batchIDs := resource.BatchIDs
+
+	if err := h.Usecase.Create(c.Request.Context(), &resource); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if notify && resource.Status == domain.ResourceStatusPublished && len(batchIDs) > 0 {
+		if err := h.notifyBatches(c.Request.Context(), resource, batchIDs, adminID); err != nil {
+			log.Printf("[resource notify] failed to notify batches for resource %s: %v", resource.ID, err)
+		}
+	}
+
+	c.JSON(http.StatusCreated, resource)
+}
+
+// notifyBatches sends a "new resource" notification to every claimed student
+// account in batchIDs. Errors are the caller's to decide whether to surface —
+// resource creation/approval should not fail because of this.
+func (h *ResourceHandler) notifyBatches(ctx context.Context, resource domain.Resource, batchIDs []string, adminID uuid.UUID) error {
+	var userIDs []uuid.UUID
+	if err := h.db.WithContext(ctx).
+		Table("students").
+		Where("batch_id IN ?", batchIDs).
+		Where("user_id IS NOT NULL").
+		Distinct().
+		Pluck("user_id", &userIDs).Error; err != nil {
+		return err
+	}
+
+	actionRoute := fmt.Sprintf("/study/courses/%s/%d?resourceId=%s&universityId=%s&departmentId=%s",
+		resource.CourseCode, resource.LessonNo, resource.ID, resource.UniversityID, resource.DepartmentID)
+	raw, err := json.Marshal(map[string]interface{}{
+		"action_route": actionRoute,
+		"resource_id":  resource.ID,
+	})
+	if err != nil {
+		return err
+	}
+	dataJSON := datatypes.JSON(raw)
+
+	n := domain.Notification{
+		Title: resource.Title,
+		Body:  fmt.Sprintf("A new %s has been added to %s.", resource.Type, resource.CourseCode),
+		Type:  "studyMaterial",
+		Scope: "batch",
+		Data:  &dataJSON,
+	}
+	_, _, err = h.notificationService.SendToUsers(ctx, n, userIDs, adminID)
+	return err
 }
 
 // Delete handles both soft delete (default) and permanent delete (?permanent=true).
@@ -88,15 +175,27 @@ func (h *ResourceHandler) ApproveResource(c *gin.Context) {
 		return
 	}
 
+	wasPublished := resource.Status == domain.ResourceStatusPublished
+	notify := resource.Notify == nil || *resource.Notify
+
+	// GetByID's Preload(clause.Associations) already populated resource.Batches;
+	// capture the IDs now — Update nils out entity.Batches on this same pointer
+	// as a side effect once it's done using it.
+	batchIDs := make([]string, len(resource.Batches))
+	for i, b := range resource.Batches {
+		batchIDs[i] = b.ID.String()
+	}
+
 	resource.Status = domain.ResourceStatusPublished
 	resource.RejectedNote = ""
 	now := time.Now()
 	resource.ReviewedAt = &now
 
-	// Set reviewer if JWT user_id is present
+	var adminID uuid.UUID
 	if userID, exists := c.Get("user_id"); exists {
 		if uid, ok := userID.(uuid.UUID); ok {
 			resource.ReviewedByID = &uid
+			adminID = uid
 		}
 	}
 
@@ -107,6 +206,12 @@ func (h *ResourceHandler) ApproveResource(c *gin.Context) {
 
 	// TODO: FCM — send push notification to resource.UploaderUID
 	// notificationService.Send(resource.UploaderUID, "Your submission was approved! 🎉", resource.Title)
+
+	if notify && !wasPublished && len(batchIDs) > 0 {
+		if err := h.notifyBatches(c.Request.Context(), *resource, batchIDs, adminID); err != nil {
+			log.Printf("[resource notify] failed to notify batches for resource %s: %v", resource.ID, err)
+		}
+	}
 
 	c.JSON(http.StatusOK, resource)
 }

@@ -30,6 +30,7 @@ func main() {
 	tables := []interface{}{
 		&domain.Verification{},
 		&domain.AuditLog{},
+		&domain.NotificationRecipient{},
 		&domain.Notification{},
 		&domain.Attachment{},
 		&domain.Resource{},
