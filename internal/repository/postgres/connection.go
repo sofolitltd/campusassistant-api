@@ -88,6 +88,13 @@ func RunMigrations(db *gorm.DB) error {
 		db.Migrator().DropTable("notifications")
 	}
 
+	// FCMToken moved off User onto a dedicated UserDevice table (multi-device
+	// support) — it was never actually read/written anywhere, safe to drop.
+	if db.Migrator().HasTable(&domain.User{}) && db.Migrator().HasColumn(&domain.User{}, "fcm_token") {
+		log.Println("[MIGRATION] Dropping legacy users.fcm_token column")
+		db.Migrator().DropColumn(&domain.User{}, "fcm_token")
+	}
+
 	// AutoMigrate all models
 	err := db.AutoMigrate(
 		&domain.University{},
@@ -107,6 +114,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.AuditLog{},
 		&domain.Notification{},
 		&domain.NotificationRecipient{},
+		&domain.UserDevice{},
 		&domain.SubscriptionPlan{},
 		&domain.SubscriptionTarget{},
 		&domain.UserSubscription{},

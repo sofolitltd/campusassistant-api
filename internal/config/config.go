@@ -29,6 +29,12 @@ type Config struct {
 	JWTSecret             string `mapstructure:"JWT_SECRET"`
 	JWTAccessTokenExpiry  int    `mapstructure:"JWT_ACCESS_TOKEN_EXPIRY"`  // in minutes
 	JWTRefreshTokenExpiry int    `mapstructure:"JWT_REFRESH_TOKEN_EXPIRY"` // in hours
+
+	// Firebase Cloud Messaging — FirebaseCredentialsJSON (raw service-account JSON) takes
+	// priority if set; otherwise FirebaseCredentialsFile is read from disk. Both optional —
+	// push is silently disabled if neither resolves to a usable credential.
+	FirebaseCredentialsJSON string `mapstructure:"FIREBASE_CREDENTIALS_JSON"`
+	FirebaseCredentialsFile string `mapstructure:"FIREBASE_CREDENTIALS_FILE"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -50,12 +56,15 @@ func LoadConfig() (*Config, error) {
 	v.BindEnv("JWT_ACCESS_TOKEN_EXPIRY")
 	v.BindEnv("JWT_REFRESH_TOKEN_EXPIRY")
 	v.BindEnv("DB_AUTO_MIGRATE")
+	v.BindEnv("FIREBASE_CREDENTIALS_JSON")
+	v.BindEnv("FIREBASE_CREDENTIALS_FILE")
 
 	// Default values
 	v.SetDefault("PORT", "8080")
 	v.SetDefault("ENVIRONMENT", "development")
 	v.SetDefault("JWT_ACCESS_TOKEN_EXPIRY", 60)   // 1 hour
 	v.SetDefault("JWT_REFRESH_TOKEN_EXPIRY", 168) // 7 days (168 hours)
+	v.SetDefault("FIREBASE_CREDENTIALS_FILE", "./firebase-service-account.json")
 
 	if err := v.ReadInConfig(); err != nil {
 		log.Println("No .env file found, using environment variables")

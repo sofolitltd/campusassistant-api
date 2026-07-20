@@ -3,3 +3,4 @@ server.log
 .DS_Store
 *.log
 /main
+firebase-service-account.json

@@ -10,7 +10,10 @@ import (
 	"campusassistant-api/internal/service"
 	"campusassistant-api/internal/usecase"
 	"campusassistant-api/pkg/auth"
+	"campusassistant-api/pkg/fcm"
 	"campusassistant-api/pkg/storage"
+	"context"
+	"log"
 	netHTTP "net/http"
 	"time"
 
@@ -60,7 +63,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		authGroup.POST("/login", authHandler.Login)
 		authGroup.POST("/refresh", authHandler.RefreshToken)
 		// Protected route - requires JWT
-		authGroup.GET("/me", middleware.JWTMiddleware(jwtManager), authHandler.GetMe)
+		authGroup.GET("/me", middleware.JWTMiddleware(jwtManager, db), authHandler.GetMe)
 	}
 
 	// Public Proxy Route for local/emulator R2 image proxying
@@ -131,7 +134,12 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 	registerRoutes[domain.Verification](v1, db, "verifications")
 
-	notificationService := service.NewNotificationService(db)
+	fcmClient, err := fcm.NewClient(context.Background(), cfg)
+	if err != nil {
+		log.Printf("[fcm] push notifications disabled: %v", err)
+		fcmClient = nil
+	}
+	notificationService := service.NewNotificationService(db, fcmClient)
 
 	r2Storage, r2Err := storage.NewR2Storage(cfg)
 	resourceRepo := postgres.NewResourceRepository(db)
@@ -267,7 +275,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	communityUsecase := usecase.NewCommunityUseCase(communityRepo, db)
 	communityHandler := handler.NewCommunityHandler(communityUsecase, r2, db)
 	communityGroup := v1.Group("/community")
-	communityGroup.Use(middleware.JWTMiddleware(jwtManager))
+	communityGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
 		communityGroup.POST("/posts", communityHandler.CreatePost)
 		communityGroup.GET("/posts", communityHandler.GetPosts)
@@ -300,13 +308,26 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	// User-facing notification endpoints — require JWT
 	notifGroup := v1.Group("/notifications")
-	notifGroup.Use(middleware.JWTMiddleware(jwtManager))
+	notifGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
 		notifGroup.GET("", notificationHandler.GetNotifications)
 		notifGroup.POST("", notificationHandler.CreateNotification)
 		notifGroup.POST("/:id/read", notificationHandler.MarkAsRead)
 		notifGroup.POST("/read-all", notificationHandler.MarkAllAsRead)
 		notifGroup.DELETE("/:id", notificationHandler.DeleteNotification)
+	}
+
+	// Device (FCM push token) Routes — require JWT
+	deviceHandler := handler.NewDeviceHandler(db, jwtManager)
+	deviceGroup := v1.Group("/devices")
+	deviceGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		deviceGroup.GET("", deviceHandler.ListDevices)
+		deviceGroup.POST("", deviceHandler.RegisterDevice)
+		deviceGroup.POST("/unregister", deviceHandler.UnregisterDevice)
+		deviceGroup.DELETE("/:id", deviceHandler.RemoveDevice)
+		deviceGroup.POST("/logout-all", deviceHandler.LogoutAll)
+		deviceGroup.POST("/logout-others", deviceHandler.LogoutOthers)
 	}
 
 	// Chat Routes
@@ -318,13 +339,13 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	// WebSocket routes (JWT-protected, no API key needed)
 	wsGroup := r.Group("/ws/chat")
-	wsGroup.Use(middleware.JWTMiddleware(jwtManager))
+	wsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
 		wsGroup.GET("/:id", chatWSHandler.ServeWS)
 	}
 
 	chatGroup := v1.Group("/conversations")
-	chatGroup.Use(middleware.JWTMiddleware(jwtManager))
+	chatGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
 		chatGroup.GET("/contacts", chatHandler.GetContacts)
 		chatGroup.GET("", chatHandler.GetConversations)

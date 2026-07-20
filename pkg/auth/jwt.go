@@ -15,9 +15,10 @@ var (
 
 // Claims represents the JWT claims structure
 type Claims struct {
-	UserID       uuid.UUID `json:"user_id"`
-	Email        string    `json:"email"`
-	Role         string    `json:"role"`
+	UserID       uuid.UUID  `json:"user_id"`
+	Email        string     `json:"email"`
+	Role         string     `json:"role"`
+	TokenVersion int        `json:"token_version"`
 	UniversityID *uuid.UUID `json:"university_id,omitempty"`
 	DepartmentID *uuid.UUID `json:"department_id,omitempty"`
 	jwt.RegisteredClaims
@@ -40,11 +41,12 @@ func NewJWTManager(secretKey string, accessExpiry, refreshExpiry time.Duration) 
 }
 
 // GenerateAccessToken creates a new access token
-func (m *JWTManager) GenerateAccessToken(userID uuid.UUID, email, role string, universityID, departmentID *uuid.UUID) (string, error) {
+func (m *JWTManager) GenerateAccessToken(userID uuid.UUID, email, role string, universityID, departmentID *uuid.UUID, tokenVersion int) (string, error) {
 	claims := Claims{
 		UserID:       userID,
 		Email:        email,
 		Role:         role,
+		TokenVersion: tokenVersion,
 		UniversityID: universityID,
 		DepartmentID: departmentID,
 		RegisteredClaims: jwt.RegisteredClaims{

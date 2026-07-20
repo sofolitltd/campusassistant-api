@@ -7,10 +7,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
-// JWTMiddleware validates JWT tokens and sets user context
-func JWTMiddleware(jwtManager *auth.JWTManager) gin.HandlerFunc {
+// JWTMiddleware validates JWT tokens and sets user context. It also checks
+// the token's embedded TokenVersion against the user's current value in the
+// DB, so a logout-all/logout-others action can invalidate already-issued
+// access tokens instantly instead of waiting for them to naturally expire.
+//
+// Performance note: this adds one PK lookup per authenticated request. If
+// this becomes a bottleneck under load, cache token_version (e.g. in Redis)
+// with a short TTL instead of hitting Postgres every time.
+func JWTMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Get token from Authorization header or query param (for WebSocket)
 		tokenString := c.GetHeader("Authorization")
@@ -35,6 +43,16 @@ func JWTMiddleware(jwtManager *auth.JWTManager) gin.HandlerFunc {
 				return
 			}
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			return
+		}
+
+		var currentTokenVersion int
+		if err := db.Table("users").Select("token_version").Where("id = ?", claims.UserID).Scan(&currentTokenVersion).Error; err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+			return
+		}
+		if currentTokenVersion != claims.TokenVersion {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Session expired, please login again"})
 			return
 		}
 

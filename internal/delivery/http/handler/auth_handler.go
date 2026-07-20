@@ -125,6 +125,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		string(user.Role),
 		user.UniversityID,
 		user.DepartmentID,
+		user.TokenVersion,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})
@@ -193,6 +194,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		string(user.Role),
 		user.UniversityID,
 		user.DepartmentID,
+		user.TokenVersion,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})
@@ -258,6 +260,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		string(user.Role),
 		user.UniversityID,
 		user.DepartmentID,
+		user.TokenVersion,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})

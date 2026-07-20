@@ -24,9 +24,11 @@ type User struct {
 	// Authentication Fields
 	Email        string `gorm:"uniqueIndex;not null" json:"email"`
 	PasswordHash string `gorm:"size:255" json:"-"` // JWT auth (bcrypt hash, never expose in JSON)
+	// TokenVersion is embedded in every access token; bumping it invalidates
+	// all previously-issued tokens (see SESSION_MANAGEMENT.md).
+	TokenVersion int `gorm:"default:1" json:"-"`
 
 	// Profile Fields
-	FCMToken   string `gorm:"index" json:"fcm_token,omitempty"`
 	Role       Role   `gorm:"type:varchar(20);default:'student'" json:"role"`
 	FirstName  string `gorm:"size:100" json:"first_name"`
 	LastName   string `gorm:"size:100" json:"last_name"`
