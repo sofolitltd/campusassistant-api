@@ -46,6 +46,32 @@ func NewClient(ctx context.Context, cfg *config.Config) (*Client, error) {
 	return &Client{msg: msgClient}, nil
 }
 
+// SubscribeToTopic subscribes tokens to topic (FCM's IID API — max 1000 tokens
+// per call; callers with more should chunk).
+func (c *Client) SubscribeToTopic(ctx context.Context, tokens []string, topic string) (*messaging.TopicManagementResponse, error) {
+	return c.msg.SubscribeToTopic(ctx, tokens, topic)
+}
+
+// UnsubscribeFromTopic unsubscribes tokens from topic.
+func (c *Client) UnsubscribeFromTopic(ctx context.Context, tokens []string, topic string) (*messaging.TopicManagementResponse, error) {
+	return c.msg.UnsubscribeFromTopic(ctx, tokens, topic)
+}
+
+// SendToTopic pushes a single message to every device subscribed to topic and
+// returns FCM's message ID. imageURL is optional — pass "" for a plain text
+// notification.
+func (c *Client) SendToTopic(ctx context.Context, topic, title, body, imageURL string, data map[string]string) (string, error) {
+	return c.msg.Send(ctx, &messaging.Message{
+		Topic: topic,
+		Notification: &messaging.Notification{
+			Title:    title,
+			Body:     body,
+			ImageURL: imageURL,
+		},
+		Data: data,
+	})
+}
+
 // SendResult summarizes a Send call across all token batches.
 type SendResult struct {
 	SuccessCount int
@@ -56,8 +82,9 @@ type SendResult struct {
 }
 
 // Send pushes the same title/body/data to every token, chunking into FCM's
-// 500-token-per-request limit and aggregating the results.
-func (c *Client) Send(ctx context.Context, tokens []string, title, body string, data map[string]string) (*SendResult, error) {
+// 500-token-per-request limit and aggregating the results. imageURL is
+// optional — pass "" for a plain text notification.
+func (c *Client) Send(ctx context.Context, tokens []string, title, body, imageURL string, data map[string]string) (*SendResult, error) {
 	result := &SendResult{}
 
 	for start := 0; start < len(tokens); start += maxTokensPerRequest {
@@ -70,8 +97,9 @@ func (c *Client) Send(ctx context.Context, tokens []string, title, body string, 
 		resp, err := c.msg.SendEachForMulticast(ctx, &messaging.MulticastMessage{
 			Tokens: batch,
 			Notification: &messaging.Notification{
-				Title: title,
-				Body:  body,
+				Title:    title,
+				Body:     body,
+				ImageURL: imageURL,
 			},
 			Data: data,
 		})

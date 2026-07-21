@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"campusassistant-api/internal/domain"
+	"campusassistant-api/internal/service"
 	"campusassistant-api/pkg/auth"
 
 	"github.com/gin-gonic/gin"
@@ -15,14 +18,17 @@ import (
 
 // DeviceHandler registers/unregisters FCM push tokens for the current user,
 // and (via jwtManager) handles session-wide logout actions — see
-// SESSION_MANAGEMENT.md.
+// SESSION_MANAGEMENT.md. topicService keeps each device's FCM topic
+// subscriptions (university/department/batch) in sync so broadcast
+// notifications can be sent as a single topic publish.
 type DeviceHandler struct {
-	db         *gorm.DB
-	jwtManager *auth.JWTManager
+	db           *gorm.DB
+	jwtManager   *auth.JWTManager
+	topicService *service.DeviceTopicService
 }
 
-func NewDeviceHandler(db *gorm.DB, jwtManager *auth.JWTManager) *DeviceHandler {
-	return &DeviceHandler{db: db, jwtManager: jwtManager}
+func NewDeviceHandler(db *gorm.DB, jwtManager *auth.JWTManager, topicService *service.DeviceTopicService) *DeviceHandler {
+	return &DeviceHandler{db: db, jwtManager: jwtManager, topicService: topicService}
 }
 
 type registerDeviceRequest struct {
@@ -62,6 +68,15 @@ func (h *DeviceHandler) RegisterDevice(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	if h.topicService != nil {
+		// Fire-and-forget, same rationale as notification push: must never
+		// slow down or fail this response. SubscribedTopics is deliberately
+		// left out of the upsert's DoUpdates above, so this reconciliation
+		// sees the *previous* owner's topics (if the token was reassigned)
+		// and correctly unsubscribes them before subscribing the new one.
+		go h.topicService.ReconcileTopics(context.Background(), userID, req.FCMToken)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Device registered"})
@@ -115,12 +130,24 @@ func (h *DeviceHandler) RemoveDevice(c *gin.Context) {
 		return
 	}
 
+	var device domain.UserDevice
+	if err := h.db.WithContext(c.Request.Context()).
+		Where("id = ? AND user_id = ?", id, userID).
+		First(&device).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	if err := h.db.WithContext(c.Request.Context()).
 		Unscoped().
 		Where("id = ? AND user_id = ?", id, userID).
 		Delete(&domain.UserDevice{}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	if h.topicService != nil && device.FCMToken != "" {
+		go h.topicService.UnsubscribeTokens(context.Background(), []string{device.FCMToken})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Device removed"})
@@ -150,6 +177,10 @@ func (h *DeviceHandler) UnregisterDevice(c *gin.Context) {
 		return
 	}
 
+	if h.topicService != nil {
+		go h.topicService.UnsubscribeTokens(context.Background(), []string{req.FCMToken})
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Device unregistered"})
 }
 
@@ -160,9 +191,14 @@ func (h *DeviceHandler) UnregisterDevice(c *gin.Context) {
 func (h *DeviceHandler) LogoutAll(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
 
+	var tokens []string
 	err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&domain.User{}).Where("id = ?", userID).
 			UpdateColumn("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&domain.UserDevice{}).Where("user_id = ?", userID).
+			Pluck("fcm_token", &tokens).Error; err != nil {
 			return err
 		}
 		return tx.Where("user_id = ?", userID).Delete(&domain.UserDevice{}).Error
@@ -170,6 +206,10 @@ func (h *DeviceHandler) LogoutAll(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	if h.topicService != nil && len(tokens) > 0 {
+		go h.topicService.UnsubscribeTokens(context.Background(), tokens)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Logged out of all devices"})
@@ -194,13 +234,22 @@ func (h *DeviceHandler) LogoutOthers(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
 
 	var user domain.User
+	var tokens []string
 	err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&domain.User{}).Where("id = ?", userID).
 			UpdateColumn("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
 			return err
 		}
 
-		devices := tx.Where("user_id = ?", userID)
+		devices := tx.Model(&domain.UserDevice{}).Where("user_id = ?", userID)
+		if req.CurrentFCMToken != "" {
+			devices = devices.Where("fcm_token != ?", req.CurrentFCMToken)
+		}
+		if err := devices.Pluck("fcm_token", &tokens).Error; err != nil {
+			return err
+		}
+
+		devices = tx.Where("user_id = ?", userID)
 		if req.CurrentFCMToken != "" {
 			devices = devices.Where("fcm_token != ?", req.CurrentFCMToken)
 		}
@@ -213,6 +262,10 @@ func (h *DeviceHandler) LogoutOthers(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	if h.topicService != nil && len(tokens) > 0 {
+		go h.topicService.UnsubscribeTokens(context.Background(), tokens)
 	}
 
 	accessToken, err := h.jwtManager.GenerateAccessToken(

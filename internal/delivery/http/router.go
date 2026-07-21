@@ -93,6 +93,22 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	registerRoutes[domain.Session](v1, db, "sessions")
 	registerRoutes[domain.Batch](v1, db, "batches")
 	registerRoutes[domain.User](v1, db, "users")
+	registerRoutes[domain.Notice](v1, db, "notices")
+	registerRoutes[domain.Contributor](v1, db, "contributors")
+
+	// Notice engagement (like/view/comment) — requires JWT to attribute actions to a user.
+	noticeEngagementHandler := handler.NewNoticeEngagementHandler(db)
+	noticeEngagementGroup := v1.Group("/notices")
+	noticeEngagementGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		noticeEngagementGroup.GET("/liked-ids", noticeEngagementHandler.GetLikedNoticeIDs)
+		noticeEngagementGroup.POST("/:id/like", noticeEngagementHandler.LikeNotice)
+		noticeEngagementGroup.POST("/:id/unlike", noticeEngagementHandler.UnlikeNotice)
+		noticeEngagementGroup.POST("/:id/view", noticeEngagementHandler.ViewNotice)
+		noticeEngagementGroup.GET("/:id/comments", noticeEngagementHandler.GetComments)
+		noticeEngagementGroup.POST("/:id/comments", noticeEngagementHandler.AddComment)
+		noticeEngagementGroup.DELETE("/comments/:comment_id", noticeEngagementHandler.DeleteComment)
+	}
 
 	// Specialized Student Routes
 	studentRepo := postgres.NewGormRepositoryWithOrder[domain.Student](db, "weight ASC, LEFT(student_id, 2) DESC, student_id ASC")
@@ -140,6 +156,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		fcmClient = nil
 	}
 	notificationService := service.NewNotificationService(db, fcmClient)
+	deviceTopicService := service.NewDeviceTopicService(db, fcmClient)
 
 	r2Storage, r2Err := storage.NewR2Storage(cfg)
 	resourceRepo := postgres.NewResourceRepository(db)
@@ -295,8 +312,12 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		communityGroup.DELETE("/comments/:comment_id", communityHandler.DeleteComment)
 	}
 
+	// Notification WebSocket hub (for real-time delivery)
+	notifHub := ws.NewNotificationHub()
+	notifWSHandler := ws.NewNotificationWSHandler(notifHub)
+
 	// Notification Routes
-	notificationHandler := handler.NewNotificationHandler(db, notificationService)
+	notificationHandler := handler.NewNotificationHandler(db, notificationService, notifHub)
 
 	// Admin notification endpoints — API key only (inherited from v1 group)
 	adminNotifGroup := v1.Group("/admin/notifications")
@@ -318,7 +339,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 
 	// Device (FCM push token) Routes — require JWT
-	deviceHandler := handler.NewDeviceHandler(db, jwtManager)
+	deviceHandler := handler.NewDeviceHandler(db, jwtManager, deviceTopicService)
 	deviceGroup := v1.Group("/devices")
 	deviceGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
@@ -342,6 +363,12 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	wsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
 		wsGroup.GET("/:id", chatWSHandler.ServeWS)
+	}
+
+	notifWsGroup := r.Group("/ws/notifications")
+	notifWsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		notifWsGroup.GET("", notifWSHandler.ServeWS)
 	}
 
 	chatGroup := v1.Group("/conversations")

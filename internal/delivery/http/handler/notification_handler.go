@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"campusassistant-api/internal/domain"
+	"campusassistant-api/internal/delivery/http/websocket"
 	"campusassistant-api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -19,19 +21,31 @@ import (
 type NotificationHandler struct {
 	db                  *gorm.DB
 	notificationService *service.NotificationService
+	notifHub            *websocket.NotificationHub
 }
 
-func NewNotificationHandler(db *gorm.DB, notificationService *service.NotificationService) *NotificationHandler {
-	return &NotificationHandler{db: db, notificationService: notificationService}
+func NewNotificationHandler(db *gorm.DB, notificationService *service.NotificationService, notifHub *websocket.NotificationHub) *NotificationHandler {
+	return &NotificationHandler{db: db, notificationService: notificationService, notifHub: notifHub}
+}
+
+// notificationTargetRequest is one row of a scope=custom audience: the
+// deepest ID set on it wins — BatchID if present, else DepartmentID, else
+// UniversityID — same convention as domain.BannerTarget/ContactTarget.
+type notificationTargetRequest struct {
+	UniversityID string `json:"university_id"`
+	DepartmentID string `json:"department_id,omitempty"`
+	BatchID      string `json:"batch_id,omitempty"`
 }
 
 type createNotificationRequest struct {
-	Title    string                 `json:"title" binding:"required"`
-	Body     string                 `json:"body" binding:"required"`
-	Type     string                 `json:"type" binding:"required"`
-	Data     map[string]interface{} `json:"data,omitempty"`
-	Scope    string                 `json:"scope" binding:"required"` // "user" | "batch" | "department" | "university"
-	TargetID string                 `json:"target_id"`                // user_id, batch_id, department_id, or university_id; omit with scope=university to broadcast to every user
+	Title    string                      `json:"title" binding:"required"`
+	Body     string                      `json:"body" binding:"required"`
+	Type     string                      `json:"type" binding:"required"`
+	ImageURL string                      `json:"image_url,omitempty"` // optional big-picture image shown in the push notification
+	Data     map[string]interface{}      `json:"data,omitempty"`
+	Scope    string                      `json:"scope" binding:"required"` // "user" | "batch" | "department" | "university" | "custom"
+	TargetID string                      `json:"target_id"`                // user_id, batch_id, department_id, or university_id; omit with scope=university to broadcast to every user
+	Targets  []notificationTargetRequest `json:"targets,omitempty"`        // scope=custom only — an arbitrary mix of universities/departments/batches
 }
 
 // validationError marks a recipient-resolution failure as caused by bad request input (HTTP 400),
@@ -80,8 +94,84 @@ func (h *NotificationHandler) resolveRecipients(ctx context.Context, req createN
 		}
 		return ids, nil
 
+	case "custom":
+		if len(req.Targets) == 0 {
+			return nil, &validationError{"targets is required when scope is custom"}
+		}
+		conds := make([]string, 0, len(req.Targets))
+		args := make([]interface{}, 0, len(req.Targets))
+		for _, t := range req.Targets {
+			switch {
+			case t.BatchID != "":
+				conds = append(conds, "batch_id = ?")
+				args = append(args, t.BatchID)
+			case t.DepartmentID != "":
+				conds = append(conds, "department_id = ?")
+				args = append(args, t.DepartmentID)
+			case t.UniversityID != "":
+				conds = append(conds, "university_id = ?")
+				args = append(args, t.UniversityID)
+			default:
+				return nil, &validationError{"each target needs at least university_id"}
+			}
+		}
+		var ids []uuid.UUID
+		if err := h.db.WithContext(ctx).
+			Table("students").
+			Where("user_id IS NOT NULL").
+			Where(strings.Join(conds, " OR "), args...).
+			Pluck("user_id", &ids).Error; err != nil {
+			return nil, err
+		}
+		return ids, nil
+
 	default:
-		return nil, &validationError{"invalid scope. Use: user, batch, department, or university"}
+		return nil, &validationError{"invalid scope. Use: user, batch, department, university, or custom"}
+	}
+}
+
+// broadcastTopics returns the FCM topics a notification should be published
+// to for req, or nil if this scope should keep using per-token push
+// (scope=user — low volume, wants per-recipient delivery info) rather than a
+// topic. "university" with an empty target_id means "every user" and maps to
+// the "all" topic every device is always subscribed to; scope=custom maps
+// each target row to its own topic and dedupes. See
+// DeviceTopicService.desiredTopics for the matching subscribe-side logic.
+func broadcastTopics(req createNotificationRequest) []string {
+	switch req.Scope {
+	case "batch", "department":
+		if req.TargetID == "" {
+			return nil
+		}
+		return []string{req.Scope + "_" + req.TargetID}
+	case "university":
+		if req.TargetID == "" {
+			return []string{"all"}
+		}
+		return []string{"university_" + req.TargetID}
+	case "custom":
+		seen := make(map[string]struct{}, len(req.Targets))
+		topics := make([]string, 0, len(req.Targets))
+		for _, t := range req.Targets {
+			var topic string
+			switch {
+			case t.BatchID != "":
+				topic = "batch_" + t.BatchID
+			case t.DepartmentID != "":
+				topic = "department_" + t.DepartmentID
+			case t.UniversityID != "":
+				topic = "university_" + t.UniversityID
+			default:
+				continue
+			}
+			if _, ok := seen[topic]; !ok {
+				seen[topic] = struct{}{}
+				topics = append(topics, topic)
+			}
+		}
+		return topics
+	default:
+		return nil
 	}
 }
 
@@ -131,13 +221,43 @@ func (h *NotificationHandler) createNotifications(c *gin.Context, req createNoti
 		Type:     req.Type,
 		Scope:    req.Scope,
 		TargetID: targetID,
+		ImageURL: req.ImageURL,
 		Data:     dataJSON,
 	}
 
-	_, count, err := h.notificationService.SendToUsers(c.Request.Context(), n, userIDs, adminID)
+	var sent *domain.Notification
+	var count int
+	if topics := broadcastTopics(req); len(topics) > 0 {
+		sent, count, err = h.notificationService.SendToUsersViaTopics(c.Request.Context(), n, userIDs, adminID, topics)
+	} else {
+		sent, count, err = h.notificationService.SendToUsers(c.Request.Context(), n, userIDs, adminID)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Broadcast to connected WebSocket clients
+	if h.notifHub != nil && sent != nil {
+		go func() {
+			payload := map[string]interface{}{
+				"type":    "new_notification",
+				"channel": "notifications",
+				"data": map[string]interface{}{
+					"id":         sent.ID.String(),
+					"title":      sent.Title,
+					"body":       sent.Body,
+					"type":       sent.Type,
+					"data":       sent.Data,
+					"created_at": sent.CreatedAt,
+					"is_read":    false,
+				},
+			}
+			raw, _ := json.Marshal(payload)
+			for _, uid := range userIDs {
+				h.notifHub.SendToUser(uid, raw)
+			}
+		}()
 	}
 
 	c.JSON(http.StatusCreated, gin.H{

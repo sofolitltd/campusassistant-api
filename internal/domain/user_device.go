@@ -16,4 +16,9 @@ type UserDevice struct {
 	FCMToken   string    `gorm:"size:255;uniqueIndex" json:"fcm_token"`
 	Platform   string    `gorm:"size:20" json:"platform"` // "android" | "ios" | "web"
 	LastSeenAt time.Time `json:"last_seen_at"`
+	// SubscribedTopics is a JSON-encoded []string of FCM topics this token is
+	// currently subscribed to (see DeviceTopicService.ReconcileTopics). Deliberately
+	// excluded from RegisterDevice's upsert DoUpdates so it still reflects the
+	// previous owner's topics until reconciliation diffs and overwrites it.
+	SubscribedTopics string `gorm:"type:text" json:"-"`
 }

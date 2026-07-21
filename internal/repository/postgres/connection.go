@@ -140,6 +140,11 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.ConversationParticipant{},
 		&domain.Message{},
 		&domain.UserDeletedMessage{},
+		&domain.Notice{},
+		&domain.Contributor{},
+		&domain.NoticeLike{},
+		&domain.NoticeRead{},
+		&domain.NoticeComment{},
 	)
 	if err != nil {
 		return fmt.Errorf("AutoMigrate failed: %w", err)

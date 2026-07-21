@@ -14,8 +14,9 @@ type Notification struct {
 	Title    string          `gorm:"size:255" json:"title"`
 	Body     string          `gorm:"type:text" json:"body"`
 	Type     string          `gorm:"size:50" json:"type"` // e.g. "NOTE_UPLOADED", "BATCH_NOTICE"
-	Scope    string          `gorm:"size:20" json:"scope"` // "user" | "batch" | "department" | "university"
+	Scope    string          `gorm:"size:20" json:"scope"` // "user" | "batch" | "department" | "university" | "custom"
 	TargetID *uuid.UUID      `gorm:"type:uuid" json:"target_id,omitempty"`
+	ImageURL string          `gorm:"size:500" json:"image_url,omitempty"` // optional; shown as a big-picture image in the push notification
 	Data     *datatypes.JSON `gorm:"type:jsonb" json:"data,omitempty"` // Extra data for navigation
 }
 
