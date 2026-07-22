@@ -55,7 +55,7 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 
 func RunMigrations(db *gorm.DB) error {
 	log.Println("[MIGRATION] Starting database migrations...")
-	
+
 	// Fix for subscription_plans.duration_days NOT NULL constraint error
 	// If the column exists, update null values to a default (e.g., 30) before GORM tries to make it NOT NULL
 	if db.Migrator().HasTable(&domain.SubscriptionPlan{}) {
@@ -98,7 +98,11 @@ func RunMigrations(db *gorm.DB) error {
 	// AutoMigrate all models
 	err := db.AutoMigrate(
 		&domain.University{},
+		&domain.Faculty{},
 		&domain.Department{},
+		&domain.Skill{},
+		&domain.SkillTarget{},
+		&domain.SkillVideo{},
 		&domain.Session{},
 		&domain.Batch{},
 		&domain.User{},
@@ -118,6 +122,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.SubscriptionPlan{},
 		&domain.SubscriptionTarget{},
 		&domain.UserSubscription{},
+		&domain.BkashTransaction{},
 		&domain.Routine{},
 		&domain.Organization{},
 		&domain.Alumni{},
@@ -136,6 +141,17 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.CommunityPostLike{},
 		&domain.CommunityCommentLike{},
 		&domain.Club{},
+		&domain.ClubFollow{},
+		&domain.ClubEvent{},
+		&domain.ClubMember{},
+		&domain.ClubManager{},
+		&domain.ClubPost{},
+		&domain.Association{},
+		&domain.AssociationFollow{},
+		&domain.AssociationEvent{},
+		&domain.AssociationMember{},
+		&domain.AssociationManager{},
+		&domain.AssociationPost{},
 		&domain.Conversation{},
 		&domain.ConversationParticipant{},
 		&domain.Message{},
@@ -145,6 +161,9 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.NoticeLike{},
 		&domain.NoticeRead{},
 		&domain.NoticeComment{},
+		&domain.Merchant{},
+		&domain.Product{},
+		&domain.ProductTarget{},
 	)
 	if err != nil {
 		return fmt.Errorf("AutoMigrate failed: %w", err)
@@ -194,4 +213,3 @@ func RunMigrations(db *gorm.DB) error {
 	log.Println("[MIGRATION] Database migrations completed successfully")
 	return nil
 }
-

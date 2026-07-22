@@ -10,6 +10,7 @@ import (
 	"campusassistant-api/internal/service"
 	"campusassistant-api/internal/usecase"
 	"campusassistant-api/pkg/auth"
+	"campusassistant-api/pkg/bkash"
 	"campusassistant-api/pkg/fcm"
 	"campusassistant-api/pkg/storage"
 	"context"
@@ -89,6 +90,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	// Helper to register generic routes
 	registerRoutes[domain.University](v1, db, "universities")
+	registerRoutes[domain.Faculty](v1, db, "faculties")
 	registerRoutes[domain.Department](v1, db, "departments")
 	registerRoutes[domain.Session](v1, db, "sessions")
 	registerRoutes[domain.Batch](v1, db, "batches")
@@ -255,7 +257,122 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	statsHandler := handler.NewStatsHandler(statsRepo)
 	v1.GET("/stats", statsHandler.GetDashboardStats)
 
-	registerRoutes[domain.Club](v1, db, "clubs")
+	// Club: dedicated repo/handler (not generic CRUD) because of the
+	// denormalized follower count and JWT-scoped follow/suggest actions.
+	clubRepo := postgres.NewClubRepository(db)
+	clubHandler := handler.NewClubHandler(clubRepo)
+	clubGroup := v1.Group("/clubs")
+	{
+		clubGroup.GET("", clubHandler.GetAllClubs)
+		clubGroup.POST("", clubHandler.CreateClub)
+		clubGroup.GET("/:id", clubHandler.GetClubByID)
+		clubGroup.PUT("/:id", clubHandler.UpdateClub)
+		clubGroup.DELETE("/:id", clubHandler.DeleteClub)
+	}
+	v1.GET("/clubs-by-location", clubHandler.GetPublicClubs)
+	v1.GET("/clubs/:id/members", clubHandler.GetPublicClubMembers)
+
+	clubAuthGroup := v1.Group("/clubs")
+	clubAuthGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		clubAuthGroup.POST("/:id/follow", clubHandler.FollowClub)
+		clubAuthGroup.DELETE("/:id/follow", clubHandler.UnfollowClub)
+		clubAuthGroup.POST("/:id/join", clubHandler.JoinClub)
+		clubAuthGroup.DELETE("/:id/join", clubHandler.LeaveClub)
+		clubAuthGroup.POST("/suggest", clubHandler.SuggestClub)
+	}
+
+	// Club events: flat resource filtered by club_id (mirrors skill-videos),
+	// plus a published-only "/clubs/:id/events" listing for the app.
+	clubEventHandler := handler.NewClubEventHandler(db, notificationService)
+	v1.GET("/clubs/:id/events", clubEventHandler.GetPublicClubEvents)
+	clubEventGroup := v1.Group("/club-events")
+	{
+		clubEventGroup.GET("", clubEventHandler.GetAllClubEvents)
+		clubEventGroup.POST("", clubEventHandler.CreateClubEvent)
+		clubEventGroup.PUT("/:id", clubEventHandler.UpdateClubEvent)
+		clubEventGroup.DELETE("/:id", clubEventHandler.DeleteClubEvent)
+	}
+
+	// Club self-service management: JWT-gated "/my/clubs/*" surface for a
+	// club's own requester/officers (ClubManager role), fully separate from
+	// the admin panel's API-key-gated /clubs CRUD above. See club.go's
+	// SuggestClub, which seeds the requester as "owner" at request time.
+	clubManagementRepo := postgres.NewClubManagementRepository(db)
+	clubManageHandler := handler.NewClubManageHandler(clubManagementRepo, clubRepo, db, notificationService)
+	v1.GET("/clubs/:id/posts", clubManageHandler.GetPublicClubPosts)
+	myClubsGroup := v1.Group("/my/clubs")
+	myClubsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myClubsGroup.GET("", clubManageHandler.GetMyClubs)
+		myClubsGroup.PUT("/:id", clubManageHandler.UpdateMyClub)
+		myClubsGroup.GET("/:id/followers", clubManageHandler.GetFollowersForPromotion)
+		myClubsGroup.GET("/:id/managers", clubManageHandler.GetManagers)
+		myClubsGroup.POST("/:id/managers", clubManageHandler.PromoteManager)
+		myClubsGroup.DELETE("/:id/managers/:userId", clubManageHandler.RemoveManager)
+		myClubsGroup.POST("/:id/events", clubManageHandler.CreateMyClubEvent)
+		myClubsGroup.POST("/:id/posts", clubManageHandler.CreateClubPost)
+	}
+
+	// BD district/upazila static reference data — shared source for the
+	// admin panel and the mobile app's Association pickers.
+	bdLocationHandler := handler.NewBDLocationHandler()
+	v1.GET("/bd-districts", bdLocationHandler.GetAll)
+
+	// Association: district/sub-district scoped counterpart to Club. Same
+	// dedicated-repo/handler shape as Club, for the same reasons.
+	associationRepo := postgres.NewAssociationRepository(db)
+	associationHandler := handler.NewAssociationHandler(associationRepo)
+	associationGroup := v1.Group("/associations")
+	{
+		associationGroup.GET("", associationHandler.GetAllAssociations)
+		associationGroup.POST("", associationHandler.CreateAssociation)
+		associationGroup.GET("/:id", associationHandler.GetAssociationByID)
+		associationGroup.PUT("/:id", associationHandler.UpdateAssociation)
+		associationGroup.DELETE("/:id", associationHandler.DeleteAssociation)
+	}
+	v1.GET("/associations-by-location", associationHandler.GetPublicAssociations)
+	v1.GET("/associations/:id/members", associationHandler.GetPublicAssociationMembers)
+
+	associationAuthGroup := v1.Group("/associations")
+	associationAuthGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		associationAuthGroup.POST("/:id/follow", associationHandler.FollowAssociation)
+		associationAuthGroup.DELETE("/:id/follow", associationHandler.UnfollowAssociation)
+		associationAuthGroup.POST("/:id/join", associationHandler.JoinAssociation)
+		associationAuthGroup.DELETE("/:id/join", associationHandler.LeaveAssociation)
+		associationAuthGroup.POST("/suggest", associationHandler.SuggestAssociation)
+	}
+
+	associationEventHandler := handler.NewAssociationEventHandler(db, notificationService)
+	v1.GET("/associations/:id/events", associationEventHandler.GetPublicAssociationEvents)
+	associationEventGroup := v1.Group("/association-events")
+	{
+		associationEventGroup.GET("", associationEventHandler.GetAllAssociationEvents)
+		associationEventGroup.POST("", associationEventHandler.CreateAssociationEvent)
+		associationEventGroup.PUT("/:id", associationEventHandler.UpdateAssociationEvent)
+		associationEventGroup.DELETE("/:id", associationEventHandler.DeleteAssociationEvent)
+	}
+
+	// Association self-service management: JWT-gated "/my/associations/*"
+	// surface, mirrors Club's "/my/clubs/*" split from the admin panel's
+	// API-key-gated /associations CRUD above.
+	associationManagementRepo := postgres.NewAssociationManagementRepository(db)
+	associationManageHandler := handler.NewAssociationManageHandler(associationManagementRepo, associationRepo, db, notificationService)
+	v1.GET("/associations/:id/posts", associationManageHandler.GetPublicAssociationPosts)
+	myAssociationsGroup := v1.Group("/my/associations")
+	myAssociationsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myAssociationsGroup.GET("", associationManageHandler.GetMyAssociations)
+		myAssociationsGroup.PUT("/:id", associationManageHandler.UpdateMyAssociation)
+		myAssociationsGroup.GET("/:id/followers", associationManageHandler.GetFollowersForPromotion)
+		myAssociationsGroup.GET("/:id/managers", associationManageHandler.GetManagers)
+		myAssociationsGroup.POST("/:id/managers", associationManageHandler.PromoteManager)
+		myAssociationsGroup.DELETE("/:id/managers/:userId", associationManageHandler.RemoveManager)
+		myAssociationsGroup.POST("/:id/events", associationManageHandler.CreateMyAssociationEvent)
+		myAssociationsGroup.POST("/:id/posts", associationManageHandler.CreateAssociationPost)
+	}
+
 	registerRoutes[domain.EmergencyContact](v1, db, "emergency-contacts")
 
 	// R2 Upload Routes
@@ -273,11 +390,11 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	{
 		subGroup.GET("/plans", subHandler.GetPlans)
 		subGroup.GET("/user/:uid", subHandler.GetUserSubscription)
-		
+
 		// Admin Routes
 		subGroup.GET("", subHandler.GetAllSubscriptions)
 		subGroup.POST("", subHandler.CreateSubscription)
-		
+
 		planGroup := v1.Group("/subscription-plans")
 		{
 			planGroup.GET("", subHandler.GetAllPlans)
@@ -285,6 +402,87 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 			planGroup.PUT("/:id", subHandler.UpdatePlan)
 			planGroup.DELETE("/:id", subHandler.DeletePlan)
 		}
+	}
+
+	// Skill Routes ("Skill Up" home section) — dedicated (not generic CRUD)
+	// because Targets need explicit delete-then-save handling on update,
+	// same reasoning as SubscriptionPlan. GetSkillsByLocation is registered
+	// at a distinct top-level path (not nested under /skills/:id) to avoid
+	// any ambiguity between a literal path segment and the :id wildcard.
+	skillRepo := postgres.NewSkillRepository(db)
+	skillHandler := handler.NewSkillHandler(skillRepo)
+	v1.GET("/skills-by-location", skillHandler.GetSkillsByLocation)
+	skillGroup := v1.Group("/skills")
+	{
+		skillGroup.GET("", skillHandler.GetAllSkills)
+		skillGroup.POST("", skillHandler.CreateSkill)
+		skillGroup.GET("/:id", skillHandler.GetSkillByID)
+		skillGroup.PUT("/:id", skillHandler.UpdateSkill)
+		skillGroup.DELETE("/:id", skillHandler.DeleteSkill)
+	}
+	registerRoutes[domain.SkillVideo](v1, db, "skill-videos")
+
+	// Campus Marketplace: Merchant + Product routes. Dedicated (not generic
+	// CRUD) for the same reasons as Skill — Targets need explicit
+	// delete-then-save handling, and merchant approval/ownership are custom
+	// state transitions/checks, not plain field updates.
+	merchantRepo := postgres.NewMerchantRepository(db)
+	merchantHandler := handler.NewMerchantHandler(merchantRepo)
+	v1.GET("/merchants/platform", merchantHandler.GetPlatformMerchant)
+	merchantGroup := v1.Group("/merchants")
+	{
+		merchantGroup.GET("", merchantHandler.GetAllMerchants)
+		merchantGroup.GET("/:id", merchantHandler.GetMerchantByID)
+		merchantGroup.PUT("/:id", merchantHandler.UpdateMerchant)
+		merchantGroup.PUT("/:id/approve", merchantHandler.ApproveMerchant)
+		merchantGroup.PUT("/:id/reject", merchantHandler.RejectMerchant)
+		merchantGroup.DELETE("/:id", merchantHandler.DeleteMerchant)
+	}
+
+	productRepo := postgres.NewProductRepository(db)
+	productHandler := handler.NewProductHandler(productRepo, merchantRepo)
+	v1.GET("/products-by-location", productHandler.GetProductsByLocation)
+	productGroup := v1.Group("/products")
+	{
+		productGroup.GET("", productHandler.GetAllProducts)
+		productGroup.POST("", productHandler.CreateProduct)
+		productGroup.GET("/:id", productHandler.GetProductByID)
+		productGroup.PUT("/:id", productHandler.UpdateProduct)
+		productGroup.DELETE("/:id", productHandler.DeleteProduct)
+	}
+
+	// Merchant self-service surface: JWT-gated "/my/*" routes for a merchant
+	// managing their own application/products, mirroring the "/my/clubs"
+	// split from the admin panel's API-key-gated /clubs and /products CRUD.
+	myMerchantGroup := v1.Group("/my/merchant")
+	myMerchantGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myMerchantGroup.POST("/apply", merchantHandler.ApplyForMerchant)
+		myMerchantGroup.GET("", merchantHandler.GetMyMerchant)
+	}
+	myProductsGroup := v1.Group("/my/products")
+	myProductsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myProductsGroup.GET("", productHandler.GetMyProducts)
+		myProductsGroup.POST("", productHandler.CreateMyProduct)
+		myProductsGroup.PUT("/:id", productHandler.UpdateMyProduct)
+		myProductsGroup.DELETE("/:id", productHandler.DeleteMyProduct)
+	}
+
+	// bKash Payment Routes — server-owns the entire bKash exchange (grant/
+	// create/execute); the app never sees bKash credentials or decides the
+	// charged amount. JWT-protected since every action is scoped to "the
+	// current user".
+	bkashClient := bkash.NewClient(cfg)
+	bkashTxRepo := postgres.NewBkashTransactionRepository(db)
+	paymentService := service.NewPaymentService(db, subRepo, bkashTxRepo, bkashClient, cfg.BkashCallbackBaseURL)
+	bkashHandler := handler.NewBkashHandler(paymentService)
+	paymentGroup := v1.Group("/payments/bkash")
+	paymentGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		paymentGroup.POST("/create", bkashHandler.CreatePayment)
+		paymentGroup.POST("/execute", bkashHandler.ExecutePayment)
+		paymentGroup.GET("/transactions", bkashHandler.ListTransactions)
 	}
 
 	// Community Routes

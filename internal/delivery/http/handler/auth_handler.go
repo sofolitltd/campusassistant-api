@@ -30,13 +30,13 @@ func NewAuthHandler(db *gorm.DB, jwtManager *auth.JWTManager, accessTokenExpiry 
 
 // RegisterRequest represents a user registration request
 type RegisterRequest struct {
-	Email        string    `json:"email" binding:"required,email"`
-	Password     string    `json:"password" binding:"required,min=8"`
-	FirstName    string    `json:"first_name" binding:"required"`
-	LastName     string    `json:"last_name" binding:"required"`
-	Phone        string    `json:"phone"`
-	Gender       string    `json:"gender"`
-	Role         string    `json:"role"` // defaults to 'student' if empty
+	Email        string     `json:"email" binding:"required,email"`
+	Password     string     `json:"password" binding:"required,min=8"`
+	FirstName    string     `json:"first_name" binding:"required"`
+	LastName     string     `json:"last_name" binding:"required"`
+	Phone        string     `json:"phone"`
+	Gender       string     `json:"gender"`
+	Role         string     `json:"role"` // defaults to 'student' if empty
 	UniversityID *uuid.UUID `json:"university_id"`
 	DepartmentID *uuid.UUID `json:"department_id"`
 }
@@ -207,6 +207,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	user.ComputeSubscriptionStatus()
+
 	c.JSON(http.StatusOK, AuthResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
@@ -300,6 +302,7 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 	if user.Student != nil && user.Student.Batch != nil {
 		user.Batch = user.Student.Batch.Name
 	}
+	user.ComputeSubscriptionStatus()
 
 	// Fallback to Student-level university/department if User-level not set
 	if user.UniversityID == nil && user.Student != nil {

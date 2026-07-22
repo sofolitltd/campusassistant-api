@@ -75,7 +75,7 @@ func (r *statsRepository) GetDashboardStats(ctx context.Context) (*domain.Dashbo
 			LastName  string
 			Plan      string
 			StartDate time.Time
-			EndDate   time.Time
+			EndDate   *time.Time // nil = Lifetime plan, never expires
 		}
 		var rows []subRow
 		r.db.WithContext(ctx).
@@ -88,7 +88,7 @@ func (r *statsRepository) GetDashboardStats(ctx context.Context) (*domain.Dashbo
 
 		for _, row := range rows {
 			status := "Active"
-			if time.Now().After(row.EndDate) {
+			if row.EndDate != nil && time.Now().After(*row.EndDate) {
 				status = "Expired"
 			}
 			stats.RecentSubscriptions = append(stats.RecentSubscriptions, domain.RecentSubscriber{

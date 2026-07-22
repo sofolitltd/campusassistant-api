@@ -29,15 +29,15 @@ type User struct {
 	TokenVersion int `gorm:"default:1" json:"-"`
 
 	// Profile Fields
-	Role       Role   `gorm:"type:varchar(20);default:'student'" json:"role"`
-	FirstName  string `gorm:"size:100" json:"first_name"`
-	LastName   string `gorm:"size:100" json:"last_name"`
-	Phone      string `gorm:"size:20" json:"phone"`
-	Gender     string `gorm:"size:10" json:"gender"` // e.g. Male, Female
-	AvatarURL  string `json:"avatar_url"`
-	IsActive   bool   `gorm:"default:true" json:"is_active"`
-	IsVerified bool   `gorm:"default:false" json:"is_verified"`
-	IsPro      bool   `gorm:"default:false" json:"is_pro"`
+	Role       Role       `gorm:"type:varchar(20);default:'student'" json:"role"`
+	FirstName  string     `gorm:"size:100" json:"first_name"`
+	LastName   string     `gorm:"size:100" json:"last_name"`
+	Phone      string     `gorm:"size:20" json:"phone"`
+	Gender     string     `gorm:"size:10" json:"gender"` // e.g. Male, Female
+	AvatarURL  string     `json:"avatar_url"`
+	IsActive   bool       `gorm:"default:true" json:"is_active"`
+	IsVerified bool       `gorm:"default:false" json:"is_verified"`
+	IsPro      bool       `gorm:"default:false" json:"is_pro"`
 	ProExpiry  *time.Time `json:"pro_expiry,omitempty"`
 
 	// Privacy Settings
@@ -53,6 +53,12 @@ type User struct {
 	// Academic Batch (populated from Student.Batch for convenience, not a DB column)
 	Batch string `gorm:"-" json:"batch"`
 
+	// SubscriptionStatus is "pro" or "basic", computed from IsPro/ProExpiry —
+	// not a DB column. Populated via ComputeSubscriptionStatus() wherever a
+	// full User is serialized to a client (see auth_handler.go GetMe/Login).
+	// This is the exact field name the Flutter client's Pro-gating reads.
+	SubscriptionStatus string `gorm:"-" json:"subscription_status"`
+
 	// Academic/Professional Profiles (Preloadable)
 	Student *Student `gorm:"foreignKey:UserID" json:"student,omitempty"`
 	Teacher *Teacher `gorm:"foreignKey:UserID" json:"teacher,omitempty"`
@@ -61,6 +67,15 @@ type User struct {
 // FullName returns the user's full name
 func (u *User) FullName() string {
 	return u.FirstName + " " + u.LastName
+}
+
+// ComputeSubscriptionStatus sets SubscriptionStatus from IsPro/ProExpiry.
+func (u *User) ComputeSubscriptionStatus() {
+	if u.IsPro && (u.ProExpiry == nil || u.ProExpiry.After(time.Now())) {
+		u.SubscriptionStatus = "pro"
+	} else {
+		u.SubscriptionStatus = "basic"
+	}
 }
 
 // Verification represents user verification requests (e.g. ID card upload).
