@@ -21,10 +21,18 @@ const (
 // MerchantID FK with no nullable-merchant special case.
 type Merchant struct {
 	Base
-	UserID          uuid.UUID      `gorm:"type:uuid;not null;index" json:"user_id"`
-	BusinessName    string         `gorm:"size:255;not null" json:"business_name"`
-	Description     string         `gorm:"type:text" json:"description"`
-	LogoURL         string         `gorm:"size:500" json:"logo_url"`
+	UserID       uuid.UUID `gorm:"type:uuid;not null;index" json:"user_id"`
+	BusinessName string    `gorm:"size:255;not null" json:"business_name"`
+	Description  string    `gorm:"type:text" json:"description"`
+	LogoURL      string    `gorm:"size:500" json:"logo_url"`
+	// BusinessType is a free-text category (e.g. "Food & Beverage",
+	// "Electronics") — shown publicly on the merchant's storefront, unlike
+	// Phone/Email which are contact details for admin use only (see
+	// MerchantHandler.GetMerchantByID/GetPlatformMerchant, which redact
+	// Phone/Email from the public response).
+	BusinessType    string         `gorm:"size:100" json:"business_type,omitempty"`
+	Phone           string         `gorm:"size:20" json:"phone,omitempty"`
+	Email           string         `gorm:"size:255" json:"email,omitempty"`
 	CommissionRate  float64        `gorm:"default:0" json:"commission_rate"` // percentage points, e.g. 10 = 10%
 	Status          MerchantStatus `gorm:"type:varchar(20);default:'pending';index" json:"status"`
 	IsPlatform      bool           `gorm:"default:false;index" json:"is_platform"`

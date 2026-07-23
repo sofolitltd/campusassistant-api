@@ -100,12 +100,13 @@ func (h *ProductHandler) DeleteProduct(c *gin.Context) {
 
 // GetProductsByLocation is the app-facing browse endpoint: published
 // products that are global (no targets) or targeted to this
-// university/department.
+// university/department. Optional ?category_id= filters by category.
 func (h *ProductHandler) GetProductsByLocation(c *gin.Context) {
 	universityID, _ := uuid.Parse(c.Query("university_id"))
 	departmentID, _ := uuid.Parse(c.Query("department_id"))
+	categoryID, _ := uuid.Parse(c.Query("category_id"))
 
-	products, err := h.repo.GetProductsByLocation(c.Request.Context(), universityID, departmentID)
+	products, err := h.repo.GetProductsByLocation(c.Request.Context(), universityID, departmentID, categoryID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch products"})
 		return

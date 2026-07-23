@@ -52,7 +52,7 @@ func slugify(s string) string {
 			out = append(out, r)
 		case r == ' ' || r == '-':
 			out = append(out, '-')
-		// drop apostrophes, periods, etc.
+			// drop apostrophes, periods, etc.
 		}
 	}
 	return string(out)
@@ -214,4 +214,28 @@ var BDDistricts = []BDDistrict{
 		"Mohanganj", "Netrokona Sadar", "Purbadhala"),
 	district("sherpur", "Sherpur", "Mymensingh",
 		"Jhenaigati", "Nakla", "Nalitabari", "Sherpur Sadar", "Sreebardi"),
+}
+
+// FindBDDistrict resolves a district by its slug ID, returning (district, ok).
+func FindBDDistrict(districtID string) (BDDistrict, bool) {
+	for _, d := range BDDistricts {
+		if d.ID == districtID {
+			return d, true
+		}
+	}
+	return BDDistrict{}, false
+}
+
+// FindBDSubDistrict resolves a sub-district within a given district by ID.
+func FindBDSubDistrict(districtID, subDistrictID string) (BDSubDistrict, bool) {
+	district, ok := FindBDDistrict(districtID)
+	if !ok {
+		return BDSubDistrict{}, false
+	}
+	for _, s := range district.SubDistricts {
+		if s.ID == subDistrictID {
+			return s, true
+		}
+	}
+	return BDSubDistrict{}, false
 }

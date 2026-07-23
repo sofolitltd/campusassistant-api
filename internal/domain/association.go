@@ -36,8 +36,9 @@ type Association struct {
 	Category        string         `gorm:"size:50;index" json:"category"`
 	IsVerified      bool           `gorm:"default:false" json:"is_verified"`
 
-	IsFollowing bool `gorm:"-" json:"is_following,omitempty"`
-	IsMember    bool `gorm:"-" json:"is_member,omitempty"`
+	IsFollowing     bool `gorm:"-" json:"is_following,omitempty"`
+	IsMember        bool `gorm:"-" json:"is_member,omitempty"`
+	IsPendingMember bool `gorm:"-" json:"is_pending_member,omitempty"`
 }
 
 // AssociationFollow records that a user follows/is interested in an
@@ -47,12 +48,20 @@ type AssociationFollow struct {
 	UserID        uuid.UUID `gorm:"type:uuid;primaryKey"`
 }
 
-// AssociationMember records that a user has formally joined an Association —
-// distinct from AssociationFollow, mirrors ClubMember.
+// AssociationMember records that a user has formally joined (or requested to
+// join) an Association — distinct from AssociationFollow, mirrors ClubMember
+// plus a Status column for the admin-approval workflow. Default 'approved'
+// so AutoMigrate backfills every pre-existing row as already-approved.
 type AssociationMember struct {
 	AssociationID uuid.UUID `gorm:"type:uuid;primaryKey"`
 	UserID        uuid.UUID `gorm:"type:uuid;primaryKey"`
+	Status        string    `gorm:"size:20;not null;default:'approved'" json:"status"`
 }
+
+const (
+	MembershipStatusPending  = "pending"
+	MembershipStatusApproved = "approved"
+)
 
 // AssociationFilters narrows GetAllAssociations. Zero-value fields are not
 // applied.
@@ -79,8 +88,21 @@ type AssociationRepository interface {
 	JoinAssociation(ctx context.Context, associationID, userID uuid.UUID) error
 	LeaveAssociation(ctx context.Context, associationID, userID uuid.UUID) error
 	GetPublicAssociationMembers(ctx context.Context, associationID uuid.UUID) ([]AssociationUserSummary, error)
+	// GetPendingAssociationMembers, ApproveAssociationMember and
+	// RejectAssociationMember power the admin-side membership-approval
+	// workflow — join requests sit in association_members with
+	// Status=pending until an admin approves (flips to approved,
+	// increments MembersCount) or rejects (deletes the row).
+	GetPendingAssociationMembers(ctx context.Context, associationID uuid.UUID) ([]AssociationUserSummary, error)
+	ApproveAssociationMember(ctx context.Context, associationID, userID uuid.UUID) error
+	RejectAssociationMember(ctx context.Context, associationID, userID uuid.UUID) error
 	GetPublicAssociationFollowers(ctx context.Context, associationID uuid.UUID) ([]AssociationUserSummary, error)
 	SuggestAssociation(ctx context.Context, a *Association, creatorID uuid.UUID) error
+	// GetJoinedAssociations returns every association userID has formally
+	// joined (AssociationMember), for the "My Joined Associations" screen —
+	// distinct from GetMyAssociations (AssociationManagementRepository),
+	// which lists associations the user owns/co-manages.
+	GetJoinedAssociations(ctx context.Context, userID uuid.UUID) ([]Association, error)
 }
 
 // AssociationUserSummary is a lightweight user projection for association

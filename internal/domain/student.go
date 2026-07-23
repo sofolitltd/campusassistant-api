@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 )
 
 // Student represents a student profile.
@@ -32,4 +33,24 @@ type Student struct {
 	VerificationCode string      `gorm:"size:20;index" json:"verification_code"` // For profile claiming
 	IsClaimed        bool        `gorm:"default:false" json:"is_claimed"`
 	ClaimedAt        *time.Time  `json:"claimed_at,omitempty"`
+	// PresentAddress/PermanentAddress are the student's own home location —
+	// distinct from the marketplace Address model (which snapshots
+	// per-order shipping details). Stored as JSONB (see StudentAddressInfo)
+	// rather than new columns, mirroring Association's SocialLinks pattern;
+	// district/sub-district reference domain.BDDistricts by slug ID, same
+	// as Association.DistrictID/SubDistrictID.
+	PresentAddress   *datatypes.JSON `gorm:"type:jsonb" json:"present_address,omitempty"`
+	PermanentAddress *datatypes.JSON `gorm:"type:jsonb" json:"permanent_address,omitempty"`
+}
+
+// StudentAddressInfo is the shape stored inside Student.PresentAddress /
+// PermanentAddress. DistrictName/SubDistrictName are resolved and
+// denormalized server-side from domain.BDDistricts — never trust
+// client-submitted names, only the IDs.
+type StudentAddressInfo struct {
+	DistrictID      string `json:"district_id"`
+	DistrictName    string `json:"district_name"`
+	SubDistrictID   string `json:"sub_district_id,omitempty"`
+	SubDistrictName string `json:"sub_district_name,omitempty"`
+	AddressLine     string `json:"address_line,omitempty"`
 }

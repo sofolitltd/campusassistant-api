@@ -164,6 +164,21 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.Merchant{},
 		&domain.Product{},
 		&domain.ProductTarget{},
+		&domain.MarketplaceCategory{},
+		&domain.Address{},
+		&domain.Order{},
+		&domain.OrderItem{},
+		&domain.OrderTransaction{},
+		&domain.LostFoundCategory{},
+		&domain.LostFoundItem{},
+		&domain.LostFoundItemTarget{},
+		&domain.LostFoundClaim{},
+		&domain.LostFoundReport{},
+		&domain.CareerCircularCategory{},
+		&domain.CareerCircular{},
+		&domain.CareerCircularTarget{},
+		&domain.CareerJob{},
+		&domain.CareerReminder{},
 	)
 	if err != nil {
 		return fmt.Errorf("AutoMigrate failed: %w", err)

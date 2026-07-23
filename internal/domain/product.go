@@ -19,7 +19,8 @@ type Product struct {
 	Price       int             `gorm:"not null" json:"price"` // smallest currency unit (poisha)
 	Stock       int             `gorm:"default:0" json:"stock"`
 	ImageURLs   pq.StringArray  `gorm:"type:text[];default:'{}'" json:"image_urls"`
-	Category    string          `gorm:"size:120;index" json:"category"`
+	CategoryID  uuid.UUID       `gorm:"type:uuid;index" json:"category_id"` // uuid.Nil = uncategorized
+	Category    MarketplaceCategory `gorm:"foreignKey:CategoryID;references:ID" json:"category,omitempty"`
 	IsPublished bool            `gorm:"default:false;index" json:"is_published"`
 	Targets     []ProductTarget `gorm:"foreignKey:ProductID;constraint:OnDelete:CASCADE" json:"targets"`
 }
@@ -47,5 +48,6 @@ type ProductRepository interface {
 
 	// GetProductsByLocation returns published products that are either
 	// global (no targets) or targeted to this university/department.
-	GetProductsByLocation(ctx context.Context, universityID, departmentID uuid.UUID) ([]Product, error)
+	// Pass categoryID != uuid.Nil to filter by category.
+	GetProductsByLocation(ctx context.Context, universityID, departmentID, categoryID uuid.UUID) ([]Product, error)
 }

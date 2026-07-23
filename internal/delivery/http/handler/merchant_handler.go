@@ -29,6 +29,16 @@ func (h *MerchantHandler) GetAllMerchants(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": merchants})
 }
 
+// redactContactInfo strips Phone/Email before a merchant is serialized to a
+// public (non-admin, non-owner) response — those are for admin/self use
+// only, unlike BusinessType which is shown on the public storefront.
+func redactContactInfo(merchant *domain.Merchant) *domain.Merchant {
+	public := *merchant
+	public.Phone = ""
+	public.Email = ""
+	return &public
+}
+
 // GetPlatformMerchant returns (creating on first use) the synthetic
 // Merchant row that owns Campus Assistant's own in-house products.
 func (h *MerchantHandler) GetPlatformMerchant(c *gin.Context) {
@@ -37,9 +47,12 @@ func (h *MerchantHandler) GetPlatformMerchant(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch platform merchant"})
 		return
 	}
-	c.JSON(http.StatusOK, merchant)
+	c.JSON(http.StatusOK, redactContactInfo(merchant))
 }
 
+// GetMerchantByID is the public storefront lookup (used by the app's
+// merchant profile screen) — Phone/Email are redacted; admins use
+// GetAllMerchants instead, which returns them in full.
 func (h *MerchantHandler) GetMerchantByID(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -51,7 +64,7 @@ func (h *MerchantHandler) GetMerchantByID(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Merchant not found"})
 		return
 	}
-	c.JSON(http.StatusOK, merchant)
+	c.JSON(http.StatusOK, redactContactInfo(merchant))
 }
 
 func (h *MerchantHandler) UpdateMerchant(c *gin.Context) {
@@ -140,6 +153,9 @@ func (h *MerchantHandler) ApplyForMerchant(c *gin.Context) {
 		BusinessName string `json:"business_name" binding:"required"`
 		Description  string `json:"description"`
 		LogoURL      string `json:"logo_url"`
+		BusinessType string `json:"business_type"`
+		Phone        string `json:"phone"`
+		Email        string `json:"email"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -151,6 +167,9 @@ func (h *MerchantHandler) ApplyForMerchant(c *gin.Context) {
 		BusinessName: body.BusinessName,
 		Description:  body.Description,
 		LogoURL:      body.LogoURL,
+		BusinessType: body.BusinessType,
+		Phone:        body.Phone,
+		Email:        body.Email,
 		Status:       domain.MerchantStatusPending,
 	}
 	if err := h.repo.CreateMerchant(c.Request.Context(), &merchant); err != nil {

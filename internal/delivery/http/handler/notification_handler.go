@@ -248,6 +248,7 @@ func (h *NotificationHandler) createNotifications(c *gin.Context, req createNoti
 					"title":      sent.Title,
 					"body":       sent.Body,
 					"type":       sent.Type,
+					"image_url":  sent.ImageURL,
 					"data":       sent.Data,
 					"created_at": sent.CreatedAt,
 					"is_read":    false,
@@ -297,6 +298,7 @@ type flatNotification struct {
 	Title     string          `json:"title"`
 	Body      string          `json:"body"`
 	Type      string          `json:"type"`
+	ImageURL  string          `json:"image_url,omitempty"`
 	IsRead    bool            `json:"is_read"`
 	Data      *datatypes.JSON `json:"data,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
@@ -308,7 +310,7 @@ func (h *NotificationHandler) GetNotifications(c *gin.Context) {
 	results := make([]flatNotification, 0)
 	if err := h.db.WithContext(c.Request.Context()).
 		Table("notification_recipients AS nr").
-		Select("nr.id AS id, n.title, n.body, n.type, nr.is_read, n.data, n.created_at").
+		Select("nr.id AS id, n.title, n.body, n.type, n.image_url, nr.is_read, n.data, n.created_at").
 		Joins("JOIN notifications n ON n.id = nr.notification_id").
 		Where("nr.user_id = ?", userID).
 		Order("n.created_at DESC").

@@ -187,8 +187,9 @@ func (h *AssociationHandler) SuggestAssociation(c *gin.Context) {
 	c.JSON(http.StatusCreated, association)
 }
 
-// POST /associations/:id/join (JWT-protected) — the formal Members roster,
-// independent of Follow.
+// POST /associations/:id/join (JWT-protected) — creates a pending request on
+// the formal Members roster (independent of Follow); an admin must approve
+// it before the user is actually counted as a member.
 func (h *AssociationHandler) JoinAssociation(c *gin.Context) {
 	associationID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -200,7 +201,7 @@ func (h *AssociationHandler) JoinAssociation(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to join association"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "Joined"})
+	c.JSON(http.StatusOK, gin.H{"message": "Request submitted, pending approval"})
 }
 
 // DELETE /associations/:id/join (JWT-protected)
@@ -231,4 +232,75 @@ func (h *AssociationHandler) GetPublicAssociationMembers(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, members)
+}
+
+// GetPendingAssociationMembers powers the admin Members-tab approval queue.
+// GET /associations/:id/members/pending (admin-only, API-key group)
+func (h *AssociationHandler) GetPendingAssociationMembers(c *gin.Context) {
+	associationID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid association ID"})
+		return
+	}
+	members, err := h.repo.GetPendingAssociationMembers(c.Request.Context(), associationID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, members)
+}
+
+// ApproveAssociationMember admits a pending requester as a formal member.
+// POST /associations/:id/members/:userId/approve (admin-only, API-key group)
+func (h *AssociationHandler) ApproveAssociationMember(c *gin.Context) {
+	associationID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid association ID"})
+		return
+	}
+	userID, err := uuid.Parse(c.Param("userId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+	if err := h.repo.ApproveAssociationMember(c.Request.Context(), associationID, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Approved"})
+}
+
+// RejectAssociationMember discards a pending join request.
+// POST /associations/:id/members/:userId/reject (admin-only, API-key group)
+func (h *AssociationHandler) RejectAssociationMember(c *gin.Context) {
+	associationID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid association ID"})
+		return
+	}
+	userID, err := uuid.Parse(c.Param("userId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+	if err := h.repo.RejectAssociationMember(c.Request.Context(), associationID, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Rejected"})
+}
+
+// GetJoinedAssociations powers the app's "My Joined Associations" screen —
+// every association the requesting user has formally joined. Distinct from
+// AssociationManageHandler.GetMyAssociations, which lists associations the
+// user owns/co-manages.
+// GET /my/associations/joined (JWT-protected)
+func (h *AssociationHandler) GetJoinedAssociations(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+	associations, err := h.repo.GetJoinedAssociations(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, associations)
 }

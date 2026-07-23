@@ -127,6 +127,27 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		studentGroup.DELETE("/:id", studentHandler.Delete)
 	}
 
+	// Self-service profile routes — JWT gated, resolve "self" from the
+	// token's user_id rather than a client-supplied ID, unlike the plain
+	// /users and /students CRUD above (API-key gated only, no ownership
+	// check). This is what EditProfilePage actually saves to.
+	userRepo := postgres.NewGormRepository[domain.User](db)
+	userUsecase := usecase.NewGenericUsecase(userRepo)
+	userHandler := handler.NewUserHandler(userUsecase)
+	myUserGroup := v1.Group("/my/user")
+	myUserGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myUserGroup.PUT("", userHandler.UpdateMyUser)
+	}
+
+	myStudentGroup := v1.Group("/my/student")
+	myStudentGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myStudentGroup.GET("", studentHandler.GetMyStudent)
+		myStudentGroup.PUT("", studentHandler.UpdateMyStudent)
+		myStudentGroup.PUT("/address", studentHandler.UpdateMyAddress)
+	}
+
 	teacherRepo := postgres.NewGormRepositoryWithOrder[domain.Teacher](db, "weight ASC, name ASC")
 	teacherUsecase := usecase.NewGenericUsecase(teacherRepo)
 	teacherHandler := handler.NewGenericHandler(teacherUsecase)
@@ -330,6 +351,9 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		associationGroup.GET("/:id", associationHandler.GetAssociationByID)
 		associationGroup.PUT("/:id", associationHandler.UpdateAssociation)
 		associationGroup.DELETE("/:id", associationHandler.DeleteAssociation)
+		associationGroup.GET("/:id/members/pending", associationHandler.GetPendingAssociationMembers)
+		associationGroup.POST("/:id/members/:userId/approve", associationHandler.ApproveAssociationMember)
+		associationGroup.POST("/:id/members/:userId/reject", associationHandler.RejectAssociationMember)
 	}
 	v1.GET("/associations-by-location", associationHandler.GetPublicAssociations)
 	v1.GET("/associations/:id/members", associationHandler.GetPublicAssociationMembers)
@@ -364,6 +388,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	myAssociationsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
 		myAssociationsGroup.GET("", associationManageHandler.GetMyAssociations)
+		myAssociationsGroup.GET("/joined", associationHandler.GetJoinedAssociations)
 		myAssociationsGroup.PUT("/:id", associationManageHandler.UpdateMyAssociation)
 		myAssociationsGroup.GET("/:id/followers", associationManageHandler.GetFollowersForPromotion)
 		myAssociationsGroup.GET("/:id/managers", associationManageHandler.GetManagers)
@@ -451,6 +476,9 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		productGroup.DELETE("/:id", productHandler.DeleteProduct)
 	}
 
+	// Marketplace Categories — simple generic CRUD, same pattern as CourseCategory.
+	registerRoutes[domain.MarketplaceCategory](v1, db, "marketplace-categories")
+
 	// Merchant self-service surface: JWT-gated "/my/*" routes for a merchant
 	// managing their own application/products, mirroring the "/my/clubs"
 	// split from the admin panel's API-key-gated /clubs and /products CRUD.
@@ -469,11 +497,55 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		myProductsGroup.DELETE("/:id", productHandler.DeleteMyProduct)
 	}
 
+	// Address book — user-managed shipping addresses (JWT gated, ownership-checked).
+	addressRepo := postgres.NewAddressRepository(db)
+	addressHandler := handler.NewAddressHandler(addressRepo)
+	addressGroup := v1.Group("/my/addresses")
+	addressGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		addressGroup.GET("", addressHandler.ListMyAddresses)
+		addressGroup.POST("", addressHandler.CreateAddress)
+		addressGroup.PUT("/:id", addressHandler.UpdateAddress)
+		addressGroup.DELETE("/:id", addressHandler.DeleteAddress)
+		addressGroup.PUT("/:id/default", addressHandler.SetDefaultAddress)
+	}
+
+	// bKash Client — shared by both subscription and marketplace payment paths.
+	bkashClient := bkash.NewClient(cfg)
+
+	// Order routes — admin (API-key gated) and buyer (JWT gated)
+	orderRepo := postgres.NewOrderRepository(db)
+	orderTxRepo := postgres.NewOrderTransactionRepository(db)
+	marketplacePaymentSvc := service.NewMarketplacePaymentService(orderRepo, orderTxRepo, bkashClient, cfg.BkashCallbackBaseURL)
+	orderHandler := handler.NewOrderHandler(orderRepo, productRepo, merchantRepo, addressRepo, marketplacePaymentSvc)
+
+	orderAdminGroup := v1.Group("/orders")
+	{
+		orderAdminGroup.GET("", orderHandler.GetAllOrders)
+		orderAdminGroup.GET("/:id", orderHandler.GetOrderByID)
+		orderAdminGroup.PUT("/:id/status", orderHandler.UpdateOrderStatus)
+	}
+
+	myOrderGroup := v1.Group("/my/orders")
+	myOrderGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myOrderGroup.POST("/checkout", orderHandler.Checkout)
+		myOrderGroup.GET("", orderHandler.ListMyOrders)
+		myOrderGroup.GET("/:id", orderHandler.GetMyOrder)
+	}
+
+	// Marketplace payment routes — JWT gated, mirrors /payments/bkash
+	mpPaymentGroup := v1.Group("/payments/marketplace")
+	mpPaymentGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		mpPaymentGroup.POST("/create", orderHandler.CreateMarketplacePayment)
+		mpPaymentGroup.POST("/execute", orderHandler.ExecuteMarketplacePayment)
+	}
+
 	// bKash Payment Routes — server-owns the entire bKash exchange (grant/
 	// create/execute); the app never sees bKash credentials or decides the
 	// charged amount. JWT-protected since every action is scoped to "the
 	// current user".
-	bkashClient := bkash.NewClient(cfg)
 	bkashTxRepo := postgres.NewBkashTransactionRepository(db)
 	paymentService := service.NewPaymentService(db, subRepo, bkashTxRepo, bkashClient, cfg.BkashCallbackBaseURL)
 	bkashHandler := handler.NewBkashHandler(paymentService)
@@ -586,6 +658,101 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		chatGroup.POST("/:id/block", chatHandler.BlockRequest)
 		chatGroup.POST("/:id/archive", chatHandler.ArchiveConversation)
 	}
+
+	// Lost & Found Portal
+	lostFoundRepo := postgres.NewLostFoundRepository(db)
+	lostFoundHandler := handler.NewLostFoundHandler(lostFoundRepo, chatUsecase, notificationService)
+
+	registerRoutes[domain.LostFoundCategory](v1, db, "lost-found-categories")
+
+	lostFoundGroup := v1.Group("/lost-found-items")
+	{
+		lostFoundGroup.GET("", lostFoundHandler.GetAllItems)
+		lostFoundGroup.GET("/:id", lostFoundHandler.GetItemByID)
+		lostFoundGroup.PUT("/:id/status", lostFoundHandler.SetStatus)
+		lostFoundGroup.DELETE("/:id", lostFoundHandler.DeleteItem)
+	}
+	v1.GET("/lost-found-items-by-location", lostFoundHandler.GetItemsByLocation)
+
+	lostFoundReportsGroup := v1.Group("/lost-found-reports")
+	{
+		lostFoundReportsGroup.GET("", lostFoundHandler.GetAllReports)
+		lostFoundReportsGroup.PUT("/:id/resolve", lostFoundHandler.ResolveReport)
+	}
+
+	// Authenticated actions any student can take against someone else's item
+	// (claim it, report it) — same base path as the admin group above but a
+	// distinct JWT-gated group, same pattern as associationAuthGroup.
+	lostFoundAuthGroup := v1.Group("/lost-found-items")
+	lostFoundAuthGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		lostFoundAuthGroup.POST("/:id/claims", lostFoundHandler.CreateClaim)
+		lostFoundAuthGroup.POST("/:id/report", lostFoundHandler.ReportItem)
+	}
+
+	// Self-service management of the caller's own items.
+	myLostFoundGroup := v1.Group("/my/lost-found-items")
+	myLostFoundGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myLostFoundGroup.GET("", lostFoundHandler.GetMyItems)
+		myLostFoundGroup.POST("", lostFoundHandler.CreateMyItem)
+		myLostFoundGroup.PUT("/:id", lostFoundHandler.UpdateMyItem)
+		myLostFoundGroup.DELETE("/:id", lostFoundHandler.DeleteMyItem)
+		myLostFoundGroup.POST("/:id/resolve", lostFoundHandler.ResolveMyItem)
+		myLostFoundGroup.GET("/:id/claims", lostFoundHandler.GetClaimsForMyItem)
+		myLostFoundGroup.POST("/:id/claims/:claimId/accept", lostFoundHandler.AcceptClaim)
+		myLostFoundGroup.POST("/:id/claims/:claimId/reject", lostFoundHandler.RejectClaim)
+	}
+
+	// Career: Circular / My Jobs / Reminders
+	careerRepo := postgres.NewCareerRepository(db)
+	careerHandler := handler.NewCareerHandler(careerRepo, db)
+
+	registerRoutes[domain.CareerCircularCategory](v1, db, "career-circular-categories")
+
+	careerCircularGroup := v1.Group("/career-circulars")
+	{
+		careerCircularGroup.GET("", careerHandler.GetAllCirculars)
+		careerCircularGroup.POST("", careerHandler.CreateCircular)
+		careerCircularGroup.GET("/:id", careerHandler.GetCircularByID)
+		careerCircularGroup.PUT("/:id", careerHandler.UpdateCircular)
+		careerCircularGroup.DELETE("/:id", careerHandler.DeleteCircular)
+		careerCircularGroup.POST("/:id/view", careerHandler.ViewCircular)
+	}
+	v1.GET("/career-circulars-by-location", careerHandler.GetCircularsByLocation)
+
+	myCareerJobsGroup := v1.Group("/my/career-jobs")
+	myCareerJobsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myCareerJobsGroup.GET("", careerHandler.GetMyJobs)
+		myCareerJobsGroup.POST("", careerHandler.CreateMyJob)
+		myCareerJobsGroup.POST("/from-circular/:circularId", careerHandler.CreateMyJobFromCircular)
+		myCareerJobsGroup.PUT("/:id", careerHandler.UpdateMyJob)
+		myCareerJobsGroup.PUT("/:id/status", careerHandler.SetMyJobStatus)
+		myCareerJobsGroup.DELETE("/:id", careerHandler.DeleteMyJob)
+	}
+
+	// Peer-shared Jobs (opt-in visibility, scoped to batch/department/
+	// university) — JWT-gated since it needs the viewer's own affiliation,
+	// but not "my own resource" so it lives outside /my/.
+	careerJobsAuthGroup := v1.Group("/career-jobs-shared")
+	careerJobsAuthGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		careerJobsAuthGroup.GET("", careerHandler.GetSharedJobs)
+	}
+
+	myCareerRemindersGroup := v1.Group("/my/career-reminders")
+	myCareerRemindersGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myCareerRemindersGroup.GET("", careerHandler.GetMyReminders)
+		myCareerRemindersGroup.POST("", careerHandler.CreateMyReminder)
+		myCareerRemindersGroup.DELETE("/:id", careerHandler.CancelMyReminder)
+	}
+
+	// Poll for due reminders and push them via FCM — server-driven delivery
+	// instead of a client-scheduled local alarm, so it survives reinstalls/
+	// reboots and works across a student's devices.
+	service.NewCareerReminderScheduler(careerRepo, notificationService).Start(context.Background())
 
 	return r
 }
