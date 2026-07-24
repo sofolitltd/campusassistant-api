@@ -406,6 +406,22 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		v1.POST("/upload", uploadHandler.UploadImage)
 		v1.DELETE("/upload", uploadHandler.DeleteFile)
 		r.GET("/upload", uploadHandler.ShowUploadPage) // Serving the demo page at root /upload
+
+		// Authenticated upload surface: ownership-tracked, and forces
+		// sensitive folders (see sensitiveUploadFolders) to private storage
+		// resolved only via a short-lived presigned URL — never a
+		// permanent public link. The legacy /upload above stays untouched
+		// since the admin panel has no JWT/login concept to satisfy it.
+		myUploadGroup := v1.Group("/my/upload")
+		myUploadGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+		{
+			myUploadGroup.POST("", uploadHandler.MyUploadImage)
+			myUploadGroup.GET("/:id", uploadHandler.MyGetUploadURL)
+		}
+		// Admin resolver for viewing any attachment (e.g. a merchant's
+		// verification documents) — no ownership check, API-key gated only
+		// (same trust level as the rest of the admin panel).
+		v1.GET("/attachments/:id/url", uploadHandler.AdminGetAttachmentURL)
 	}
 
 	// Subscription Routes
@@ -452,7 +468,8 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// delete-then-save handling, and merchant approval/ownership are custom
 	// state transitions/checks, not plain field updates.
 	merchantRepo := postgres.NewMerchantRepository(db)
-	merchantHandler := handler.NewMerchantHandler(merchantRepo)
+	productRepo := postgres.NewProductRepository(db)
+	merchantHandler := handler.NewMerchantHandler(merchantRepo, productRepo, notificationService)
 	v1.GET("/merchants/platform", merchantHandler.GetPlatformMerchant)
 	merchantGroup := v1.Group("/merchants")
 	{
@@ -464,7 +481,6 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		merchantGroup.DELETE("/:id", merchantHandler.DeleteMerchant)
 	}
 
-	productRepo := postgres.NewProductRepository(db)
 	productHandler := handler.NewProductHandler(productRepo, merchantRepo)
 	v1.GET("/products-by-location", productHandler.GetProductsByLocation)
 	productGroup := v1.Group("/products")
@@ -488,13 +504,18 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		myMerchantGroup.POST("/apply", merchantHandler.ApplyForMerchant)
 		myMerchantGroup.GET("", merchantHandler.GetMyMerchant)
 	}
-	myProductsGroup := v1.Group("/my/products")
-	myProductsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	myMerchantsGroup := v1.Group("/my/merchants")
+	myMerchantsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
-		myProductsGroup.GET("", productHandler.GetMyProducts)
-		myProductsGroup.POST("", productHandler.CreateMyProduct)
-		myProductsGroup.PUT("/:id", productHandler.UpdateMyProduct)
-		myProductsGroup.DELETE("/:id", productHandler.DeleteMyProduct)
+		myMerchantsGroup.GET("", merchantHandler.GetMyMerchants)
+		myMerchantsGroup.PUT("/:id", merchantHandler.UpdateMyMerchant)
+		myMerchantsGroup.DELETE("/:id", merchantHandler.DeleteMyMerchant)
+		// Scoped by merchant :id (not resolved from the JWT user alone) since
+		// a user can own several merchants — see ProductHandler.resolveOwnedMerchant.
+		myMerchantsGroup.GET("/:id/products", productHandler.GetMyProducts)
+		myMerchantsGroup.POST("/:id/products", productHandler.CreateMyProduct)
+		myMerchantsGroup.PUT("/:id/products/:productId", productHandler.UpdateMyProduct)
+		myMerchantsGroup.DELETE("/:id/products/:productId", productHandler.DeleteMyProduct)
 	}
 
 	// Address book — user-managed shipping addresses (JWT gated, ownership-checked).
@@ -532,6 +553,19 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		myOrderGroup.POST("/checkout", orderHandler.Checkout)
 		myOrderGroup.GET("", orderHandler.ListMyOrders)
 		myOrderGroup.GET("/:id", orderHandler.GetMyOrder)
+	}
+
+	// Merchant self-service orders: a seller viewing orders containing their
+	// own products, scoped by merchant id (ownership-checked) since a user
+	// may own several merchants — grouped separately from /my/merchants
+	// above only because orderHandler isn't constructed until this point.
+	myMerchantOrdersGroup := v1.Group("/my/merchants/:id/orders")
+	myMerchantOrdersGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myMerchantOrdersGroup.GET("", orderHandler.ListMerchantOrders)
+		// Fulfillment only — shipped/delivered. Payment/cancellation states
+		// stay admin-only via PUT /orders/:id/status above.
+		myMerchantOrdersGroup.PUT("/:orderId/status", orderHandler.MerchantUpdateOrderStatus)
 	}
 
 	// Marketplace payment routes — JWT gated, mirrors /payments/bkash

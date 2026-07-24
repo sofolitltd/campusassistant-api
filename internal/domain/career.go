@@ -32,9 +32,9 @@ const (
 type CareerReminderStatus string
 
 const (
-	CareerReminderPending CareerReminderStatus = "pending"
-	CareerReminderClaimed CareerReminderStatus = "claimed"
-	CareerReminderSent    CareerReminderStatus = "sent"
+	CareerReminderPending   CareerReminderStatus = "pending"
+	CareerReminderClaimed   CareerReminderStatus = "claimed"
+	CareerReminderSent      CareerReminderStatus = "sent"
 	CareerReminderCancelled CareerReminderStatus = "cancelled"
 )
 
@@ -83,17 +83,21 @@ type CareerCircularTarget struct {
 // image URLs onto a Product rather than joining live.
 type CareerJob struct {
 	Base
-	UserID         uuid.UUID       `gorm:"type:uuid;not null;index" json:"user_id"`
-	CircularID     *uuid.UUID      `gorm:"type:uuid;index" json:"circular_id,omitempty"`
-	Title          string          `gorm:"size:255;not null" json:"title"`
-	Organization   string          `gorm:"size:255" json:"organization"`
-	PostLink       string          `gorm:"size:500" json:"post_link"`
-	ResourceLink   string          `gorm:"size:500" json:"resource_link"`
-	AttachmentURLs pq.StringArray  `gorm:"type:text[];default:'{}'" json:"attachment_urls"`
-	PublishDate    *time.Time      `gorm:"type:date" json:"publish_date,omitempty"`
-	DeadlineDate   *time.Time      `json:"deadline_date,omitempty"`
-	Status         CareerJobStatus `gorm:"type:varchar(20);default:'pending';index" json:"status"`
-	Notes          string          `gorm:"type:text" json:"notes"`
+	UserID       uuid.UUID  `gorm:"type:uuid;not null;index" json:"user_id"`
+	CircularID   *uuid.UUID `gorm:"type:uuid;index" json:"circular_id,omitempty"`
+	Title        string     `gorm:"size:255;not null" json:"title"`
+	Organization string     `gorm:"size:255" json:"organization"`
+	// CategoryID reuses the same taxonomy as CareerCircular (e.g. Government
+	// Job, Bank Job) — uuid.Nil = uncategorized.
+	CategoryID     uuid.UUID              `gorm:"type:uuid;index" json:"category_id"`
+	Category       CareerCircularCategory `gorm:"foreignKey:CategoryID;references:ID" json:"category,omitempty"`
+	PostLink       string                 `gorm:"size:500" json:"post_link"`
+	ResourceLink   string                 `gorm:"size:500" json:"resource_link"`
+	AttachmentURLs pq.StringArray         `gorm:"type:text[];default:'{}'" json:"attachment_urls"`
+	PublishDate    *time.Time             `gorm:"type:date" json:"publish_date,omitempty"`
+	DeadlineDate   *time.Time             `json:"deadline_date,omitempty"`
+	Status         CareerJobStatus        `gorm:"type:varchar(20);default:'pending';index" json:"status"`
+	Notes          string                 `gorm:"type:text" json:"notes"`
 
 	// Scope + snapshot fields: opt-in peer sharing. Scope defaults to
 	// "private" (never shown to anyone else). If the poster shares with

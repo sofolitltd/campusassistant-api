@@ -114,13 +114,25 @@ func (h *ProductHandler) GetProductsByLocation(c *gin.Context) {
 	c.JSON(http.StatusOK, products)
 }
 
-// currentMerchant resolves the JWT user's own approved merchant profile, or
-// aborts the request with an appropriate error.
-func (h *ProductHandler) currentMerchant(c *gin.Context) (*domain.Merchant, bool) {
+// resolveOwnedMerchant resolves the merchant named by the :id URL param,
+// verifying the JWT user actually owns it and it's approved. Scoped by ID
+// rather than derived from the JWT user alone (via GetMerchantByUserID)
+// because a user can own several merchants — resolving "the" merchant for
+// a user is ambiguous; the caller must say which one they're acting as.
+func (h *ProductHandler) resolveOwnedMerchant(c *gin.Context) (*domain.Merchant, bool) {
 	userID := c.MustGet("user_id").(uuid.UUID)
-	merchant, err := h.merchantRepo.GetMerchantByUserID(c.Request.Context(), userID)
+	merchantID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "No merchant profile found"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid merchant id"})
+		return nil, false
+	}
+	merchant, err := h.merchantRepo.GetMerchantByID(c.Request.Context(), merchantID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Merchant not found"})
+		return nil, false
+	}
+	if merchant.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Not your merchant"})
 		return nil, false
 	}
 	if merchant.Status != domain.MerchantStatusApproved {
@@ -130,9 +142,9 @@ func (h *ProductHandler) currentMerchant(c *gin.Context) (*domain.Merchant, bool
 	return merchant, true
 }
 
-// GetMyProducts lists the current merchant's own products (self-service).
+// GetMyProducts lists a merchant's own products (self-service).
 func (h *ProductHandler) GetMyProducts(c *gin.Context) {
-	merchant, ok := h.currentMerchant(c)
+	merchant, ok := h.resolveOwnedMerchant(c)
 	if !ok {
 		return
 	}
@@ -144,9 +156,9 @@ func (h *ProductHandler) GetMyProducts(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": products})
 }
 
-// CreateMyProduct creates a product owned by the current merchant.
+// CreateMyProduct creates a product owned by the given merchant.
 func (h *ProductHandler) CreateMyProduct(c *gin.Context) {
-	merchant, ok := h.currentMerchant(c)
+	merchant, ok := h.resolveOwnedMerchant(c)
 	if !ok {
 		return
 	}
@@ -163,13 +175,13 @@ func (h *ProductHandler) CreateMyProduct(c *gin.Context) {
 	c.JSON(http.StatusOK, product)
 }
 
-// UpdateMyProduct updates a product, only if it's owned by the current merchant.
+// UpdateMyProduct updates a product, only if it's owned by the given merchant.
 func (h *ProductHandler) UpdateMyProduct(c *gin.Context) {
-	merchant, ok := h.currentMerchant(c)
+	merchant, ok := h.resolveOwnedMerchant(c)
 	if !ok {
 		return
 	}
-	id, err := uuid.Parse(c.Param("id"))
+	id, err := uuid.Parse(c.Param("productId"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product id"})
 		return
@@ -199,13 +211,13 @@ func (h *ProductHandler) UpdateMyProduct(c *gin.Context) {
 	c.JSON(http.StatusOK, existing)
 }
 
-// DeleteMyProduct deletes a product, only if it's owned by the current merchant.
+// DeleteMyProduct deletes a product, only if it's owned by the given merchant.
 func (h *ProductHandler) DeleteMyProduct(c *gin.Context) {
-	merchant, ok := h.currentMerchant(c)
+	merchant, ok := h.resolveOwnedMerchant(c)
 	if !ok {
 		return
 	}
-	id, err := uuid.Parse(c.Param("id"))
+	id, err := uuid.Parse(c.Param("productId"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid product id"})
 		return

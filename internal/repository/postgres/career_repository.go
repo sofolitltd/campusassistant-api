@@ -106,14 +106,14 @@ func (r *careerRepository) GetCircularsByLocation(ctx context.Context, universit
 
 func (r *careerRepository) GetMyJobs(ctx context.Context, userID uuid.UUID) ([]domain.CareerJob, error) {
 	var jobs []domain.CareerJob
-	err := r.db.WithContext(ctx).Where("user_id = ?", userID).
+	err := r.db.WithContext(ctx).Preload("Category").Where("user_id = ?", userID).
 		Order("created_at desc").Find(&jobs).Error
 	return jobs, err
 }
 
 func (r *careerRepository) GetJobByID(ctx context.Context, id uuid.UUID) (*domain.CareerJob, error) {
 	var job domain.CareerJob
-	err := r.db.WithContext(ctx).First(&job, "id = ?", id).Error
+	err := r.db.WithContext(ctx).Preload("Category").First(&job, "id = ?", id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func (r *careerRepository) DeleteJob(ctx context.Context, id uuid.UUID) error {
 
 func (r *careerRepository) GetSharedJobsByScope(ctx context.Context, scope domain.CareerJobScope, viewer domain.CommunityViewer) ([]domain.CareerJob, error) {
 	var jobs []domain.CareerJob
-	q := r.db.WithContext(ctx).Preload("Poster")
+	q := r.db.WithContext(ctx).Preload("Poster").Preload("Category")
 
 	switch scope {
 	case domain.CareerJobScopeBatch:

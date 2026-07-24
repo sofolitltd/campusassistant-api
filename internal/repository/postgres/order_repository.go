@@ -57,3 +57,27 @@ func (r *orderRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status
 		Where("id = ?", id).
 		Update("status", status).Error
 }
+
+func (r *orderRepository) GetByMerchant(ctx context.Context, merchantID uuid.UUID) ([]domain.Order, error) {
+	// Two-step: find the distinct order IDs via order_items, then re-query
+	// with Preload — combining Preload with a Joins+Distinct in one query
+	// doesn't reliably scope the preloaded Items to the join condition.
+	var orderIDs []uuid.UUID
+	if err := r.db.WithContext(ctx).Model(&domain.OrderItem{}).
+		Where("merchant_id = ?", merchantID).
+		Distinct().
+		Pluck("order_id", &orderIDs).Error; err != nil {
+		return nil, err
+	}
+	if len(orderIDs) == 0 {
+		return []domain.Order{}, nil
+	}
+
+	var orders []domain.Order
+	err := r.db.WithContext(ctx).
+		Preload("Items").
+		Where("id IN ?", orderIDs).
+		Order("created_at desc").
+		Find(&orders).Error
+	return orders, err
+}

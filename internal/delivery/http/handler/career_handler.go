@@ -250,6 +250,7 @@ func (h *CareerHandler) CreateMyJobFromCircular(c *gin.Context) {
 		CircularID:     &circular.ID,
 		Title:          circular.Title,
 		Organization:   circular.Organization,
+		CategoryID:     circular.CategoryID,
 		PostLink:       circular.PostLink,
 		ResourceLink:   circular.ResourceLink,
 		AttachmentURLs: circular.AttachmentURLs,

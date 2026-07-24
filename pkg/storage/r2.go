@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"time"
 
 	"campusassistant-api/internal/config"
 
@@ -77,6 +78,40 @@ func (s *R2Storage) UploadReader(ctx context.Context, reader io.Reader, path str
 	}
 
 	return fmt.Sprintf("%s/%s", s.publicURL, path), nil
+}
+
+// PutObjectAt stores a file at an exact key with no public URL returned —
+// used for private/sensitive uploads, where the caller must never hand a
+// permanent public link back to the client.
+func (s *R2Storage) PutObjectAt(ctx context.Context, file *multipart.FileHeader, path string) error {
+	f, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucketName),
+		Key:         aws.String(path),
+		Body:        f,
+		ContentType: aws.String(file.Header.Get("Content-Type")),
+	})
+	return err
+}
+
+// GetPresignedURL returns a time-limited URL for reading a private object —
+// the only way a private (e.g. NID/Student-ID proof) object should ever be
+// served to a client.
+func (s *R2Storage) GetPresignedURL(ctx context.Context, path string, ttl time.Duration) (string, error) {
+	presignClient := s3.NewPresignClient(s.client)
+	req, err := presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(path),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", err
+	}
+	return req.URL, nil
 }
 
 func (s *R2Storage) DeleteFile(ctx context.Context, fileURL string) error {

@@ -228,6 +228,112 @@ func (h *OrderHandler) GetMyOrder(c *gin.Context) {
 	c.JSON(http.StatusOK, order)
 }
 
+// ListMerchantOrders returns every order containing at least one item sold
+// by the given merchant (ownership-checked against the JWT user), with
+// Items trimmed down to only that merchant's own line items so a merchant
+// never sees another seller's items from the same checkout.
+func (h *OrderHandler) ListMerchantOrders(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+	merchantID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid merchant id"})
+		return
+	}
+	merchant, err := h.merchantRepo.GetMerchantByID(c.Request.Context(), merchantID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Merchant not found"})
+		return
+	}
+	if merchant.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Not your merchant"})
+		return
+	}
+
+	orders, err := h.orderRepo.GetByMerchant(c.Request.Context(), merchantID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch orders"})
+		return
+	}
+	for i := range orders {
+		filtered := orders[i].Items[:0]
+		for _, item := range orders[i].Items {
+			if item.MerchantID == merchantID {
+				filtered = append(filtered, item)
+			}
+		}
+		orders[i].Items = filtered
+	}
+	c.JSON(http.StatusOK, gin.H{"data": orders})
+}
+
+// merchantAllowedStatuses are the only transitions a merchant may make
+// themselves — payment/cancellation states stay admin-controlled since
+// those tie into the payment gateway and refund flow, not fulfillment.
+var merchantAllowedStatuses = map[domain.OrderStatus]bool{
+	domain.OrderStatusShipped:   true,
+	domain.OrderStatusDelivered: true,
+}
+
+// MerchantUpdateOrderStatus lets a merchant progress fulfillment (mark an
+// order shipped/delivered) on an order containing their own items —
+// ownership-checked against both the merchant and the order itself.
+func (h *OrderHandler) MerchantUpdateOrderStatus(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+	merchantID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid merchant id"})
+		return
+	}
+	orderID, err := uuid.Parse(c.Param("orderId"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order id"})
+		return
+	}
+
+	merchant, err := h.merchantRepo.GetMerchantByID(c.Request.Context(), merchantID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Merchant not found"})
+		return
+	}
+	if merchant.UserID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Not your merchant"})
+		return
+	}
+
+	var req UpdateOrderStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !merchantAllowedStatuses[req.Status] {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Merchants may only set status to shipped or delivered"})
+		return
+	}
+
+	order, err := h.orderRepo.GetByID(c.Request.Context(), orderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+		return
+	}
+	hasItem := false
+	for _, item := range order.Items {
+		if item.MerchantID == merchantID {
+			hasItem = true
+			break
+		}
+	}
+	if !hasItem {
+		c.JSON(http.StatusForbidden, gin.H{"error": "This order has no items from your business"})
+		return
+	}
+
+	if err := h.orderRepo.UpdateStatus(c.Request.Context(), orderID, req.Status); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order status"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Order status updated"})
+}
+
 // CreateMarketplacePayment starts a bKash checkout for an order.
 func (h *OrderHandler) CreateMarketplacePayment(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)

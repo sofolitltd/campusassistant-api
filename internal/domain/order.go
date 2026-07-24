@@ -62,4 +62,9 @@ type OrderRepository interface {
 	GetByBuyer(ctx context.Context, buyerID uuid.UUID) ([]Order, error)
 	GetAll(ctx context.Context, status OrderStatus) ([]Order, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status OrderStatus) error
+	// GetByMerchant returns every order containing at least one item sold by
+	// merchantID — a merchant's own "my orders" view, not the full order
+	// (other merchants' items in the same checkout are excluded by the
+	// caller before serializing).
+	GetByMerchant(ctx context.Context, merchantID uuid.UUID) ([]Order, error)
 }

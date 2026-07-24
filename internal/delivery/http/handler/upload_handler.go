@@ -15,6 +15,18 @@ import (
 	"gorm.io/gorm"
 )
 
+// sensitiveUploadFolders are forced to Visibility="private" regardless of
+// what the client requests — never trust client-supplied visibility for
+// identity documents. Extend this set for future sensitive-document needs
+// (payment proofs, dispute evidence, etc.) rather than adding another
+// one-off upload path.
+var sensitiveUploadFolders = map[string]bool{
+	"merchant-verification": true,
+}
+
+// presignedURLTTL is how long a resolved private-attachment URL stays valid.
+const presignedURLTTL = 10 * time.Minute
+
 type UploadHandler struct {
 	db      *gorm.DB
 	storage *storage.R2Storage
@@ -75,6 +87,126 @@ func (h *UploadHandler) UploadImage(c *gin.Context) {
 	logger.Infof("Attachment saved to DB with ID: %s", attachment.ID)
 
 	c.JSON(http.StatusOK, attachment)
+}
+
+// MyUploadImage is the JWT-gated authenticated equivalent of UploadImage.
+// Uploads to a folder in sensitiveUploadFolders are stored privately (no
+// public URL, no plain PutObject-then-return-URL) — the caller only gets
+// the attachment's id back and must resolve a viewing URL via
+// MyGetUploadURL, which is ownership-checked.
+func (h *UploadHandler) MyUploadImage(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+
+	file, err := c.FormFile("image")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No image uploaded"})
+		return
+	}
+
+	folder := c.PostForm("folder")
+	if folder == "" {
+		folder = "uploads"
+	}
+	isPrivate := sensitiveUploadFolders[folder]
+
+	now := time.Now()
+	uniqueID := uuid.New().String()
+	ext := filepath.Ext(file.Filename)
+	path := fmt.Sprintf("%s/%d/%02d/%s%s", folder, now.Year(), now.Month(), uniqueID, ext)
+
+	attachment := domain.Attachment{
+		FileName:   file.Filename,
+		FileType:   file.Header.Get("Content-Type"),
+		FileSize:   file.Size,
+		StorageKey: path,
+		UploaderID: &userID,
+	}
+
+	if isPrivate {
+		if err := h.storage.PutObjectAt(c.Request.Context(), file, path); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to upload: %v", err)})
+			return
+		}
+		attachment.Visibility = "private"
+	} else {
+		fileURL, err := h.storage.UploadFile(c.Request.Context(), file, path)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to upload: %v", err)})
+			return
+		}
+		attachment.FileURL = fileURL
+		attachment.Visibility = "public"
+	}
+
+	if err := h.db.Create(&attachment).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save to database: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, attachment)
+}
+
+// MyGetUploadURL resolves a viewing URL for an attachment the caller owns —
+// public attachments just return their permanent URL; private ones get a
+// short-lived presigned URL, never a permanent one.
+func (h *UploadHandler) MyGetUploadURL(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid attachment id"})
+		return
+	}
+
+	var attachment domain.Attachment
+	if err := h.db.First(&attachment, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Attachment not found"})
+		return
+	}
+
+	if attachment.Visibility != "private" {
+		c.JSON(http.StatusOK, gin.H{"url": attachment.FileURL})
+		return
+	}
+	if attachment.UploaderID == nil || *attachment.UploaderID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You do not own this file"})
+		return
+	}
+
+	url, err := h.storage.GetPresignedURL(c.Request.Context(), attachment.StorageKey, presignedURLTTL)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve file URL"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"url": url, "expires_in_seconds": int(presignedURLTTL.Seconds())})
+}
+
+// AdminGetAttachmentURL is the API-key-gated admin equivalent of
+// MyGetUploadURL — no ownership check, since the admin panel is trusted to
+// review any merchant's submitted verification documents.
+func (h *UploadHandler) AdminGetAttachmentURL(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid attachment id"})
+		return
+	}
+
+	var attachment domain.Attachment
+	if err := h.db.First(&attachment, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Attachment not found"})
+		return
+	}
+
+	if attachment.Visibility != "private" {
+		c.JSON(http.StatusOK, gin.H{"url": attachment.FileURL})
+		return
+	}
+
+	url, err := h.storage.GetPresignedURL(c.Request.Context(), attachment.StorageKey, presignedURLTTL)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve file URL"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"url": url, "expires_in_seconds": int(presignedURLTTL.Seconds())})
 }
 
 func (h *UploadHandler) ShowUploadPage(c *gin.Context) {
