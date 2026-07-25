@@ -9,16 +9,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type LostFoundHandler struct {
+	db                  *gorm.DB
 	repo                domain.LostFoundRepository
 	chatUsecase         domain.ChatUseCase
 	notificationService *service.NotificationService
 }
 
-func NewLostFoundHandler(repo domain.LostFoundRepository, chatUsecase domain.ChatUseCase, notificationService *service.NotificationService) *LostFoundHandler {
-	return &LostFoundHandler{repo: repo, chatUsecase: chatUsecase, notificationService: notificationService}
+func NewLostFoundHandler(db *gorm.DB, repo domain.LostFoundRepository, chatUsecase domain.ChatUseCase, notificationService *service.NotificationService) *LostFoundHandler {
+	return &LostFoundHandler{db: db, repo: repo, chatUsecase: chatUsecase, notificationService: notificationService}
 }
 
 // ---- Admin (moderation-only; items are always student-generated) ----
@@ -275,7 +277,7 @@ func (h *LostFoundHandler) CreateClaim(c *gin.Context) {
 	}
 	_ = h.repo.SetItemStatus(c.Request.Context(), itemID, domain.LostFoundStatusClaimed, "")
 
-	_ = notifyLostFoundUser(c.Request.Context(), h.notificationService, item.PosterID,
+	_ = notifyLostFoundUser(c.Request.Context(), h.db, h.notificationService, item.PosterID,
 		"New claim on your item", "Someone has responded to your \""+item.Title+"\" post.", itemID, userID)
 
 	c.JSON(http.StatusOK, claim)
@@ -324,7 +326,7 @@ func (h *LostFoundHandler) AcceptClaim(c *gin.Context) {
 		return
 	}
 
-	_ = notifyLostFoundUser(c.Request.Context(), h.notificationService, claim.ClaimerID,
+	_ = notifyLostFoundUser(c.Request.Context(), h.db, h.notificationService, claim.ClaimerID,
 		"Your claim was accepted", "The poster of \""+item.Title+"\" accepted your claim. Open the chat to coordinate.", item.ID, item.PosterID)
 
 	c.JSON(http.StatusOK, gin.H{"claim": claim, "conversation": conversation})
@@ -350,7 +352,7 @@ func (h *LostFoundHandler) RejectClaim(c *gin.Context) {
 		return
 	}
 
-	_ = notifyLostFoundUser(c.Request.Context(), h.notificationService, claim.ClaimerID,
+	_ = notifyLostFoundUser(c.Request.Context(), h.db, h.notificationService, claim.ClaimerID,
 		"Your claim was declined", "The poster of \""+item.Title+"\" declined your claim.", item.ID, item.PosterID)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Claim rejected"})

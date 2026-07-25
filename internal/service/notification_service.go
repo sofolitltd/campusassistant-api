@@ -28,23 +28,28 @@ func NewNotificationService(db *gorm.DB, fcmClient *fcm.Client) *NotificationSer
 const recipientBatchSize = 100
 
 // SendToUsers creates n as a single content row and inserts one
-// NotificationRecipient per user, atomically. No-ops (returns nil, 0, nil)
+// NotificationRecipient per user, atomically. No-ops (returns nil, nil, nil)
 // if userIDs is empty. n.ID/CreatedByID/UpdatedByID are set by this call.
-func (s *NotificationService) SendToUsers(ctx context.Context, n domain.Notification, userIDs []uuid.UUID, createdBy uuid.UUID) (*domain.Notification, int, error) {
+// The returned recipients (one per user, in no guaranteed order) let callers
+// — e.g. the WebSocket broadcast in notification_handler.go — address each
+// user by their own NotificationRecipient.ID, which is what the REST API
+// (GetNotifications/MarkAsRead/DeleteNotification) actually operates on, as
+// opposed to the shared Notification content-row ID.
+func (s *NotificationService) SendToUsers(ctx context.Context, n domain.Notification, userIDs []uuid.UUID, createdBy uuid.UUID) (*domain.Notification, []domain.NotificationRecipient, error) {
 	if len(userIDs) == 0 {
-		return nil, 0, nil
+		return nil, nil, nil
 	}
 
 	n.ID = uuid.New()
 	n.CreatedByID = createdBy
 	n.UpdatedByID = createdBy
 
+	recipients := make([]domain.NotificationRecipient, 0, len(userIDs))
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&n).Error; err != nil {
 			return err
 		}
 
-		recipients := make([]domain.NotificationRecipient, 0, len(userIDs))
 		for _, uid := range userIDs {
 			r := domain.NotificationRecipient{
 				NotificationID: n.ID,
@@ -68,7 +73,7 @@ func (s *NotificationService) SendToUsers(ctx context.Context, n domain.Notifica
 		return nil
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 
 	if s.fcm != nil {
@@ -78,7 +83,7 @@ func (s *NotificationService) SendToUsers(ctx context.Context, n domain.Notifica
 		go s.pushAsync(context.Background(), n, userIDs)
 	}
 
-	return &n, len(userIDs), nil
+	return &n, recipients, nil
 }
 
 // pushAsync looks up device tokens for userIDs and sends n via FCM, pruning
@@ -141,21 +146,21 @@ func (s *NotificationService) pushAsync(ctx context.Context, n domain.Notificati
 // no need to fan out per-token. A custom multi-target send may imply several
 // topics (one per distinct target row); each gets its own FCM publish call,
 // still just one DB write for the notification/recipients.
-func (s *NotificationService) SendToUsersViaTopics(ctx context.Context, n domain.Notification, userIDs []uuid.UUID, createdBy uuid.UUID, topics []string) (*domain.Notification, int, error) {
+func (s *NotificationService) SendToUsersViaTopics(ctx context.Context, n domain.Notification, userIDs []uuid.UUID, createdBy uuid.UUID, topics []string) (*domain.Notification, []domain.NotificationRecipient, error) {
 	if len(userIDs) == 0 {
-		return nil, 0, nil
+		return nil, nil, nil
 	}
 
 	n.ID = uuid.New()
 	n.CreatedByID = createdBy
 	n.UpdatedByID = createdBy
 
+	recipients := make([]domain.NotificationRecipient, 0, len(userIDs))
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&n).Error; err != nil {
 			return err
 		}
 
-		recipients := make([]domain.NotificationRecipient, 0, len(userIDs))
 		for _, uid := range userIDs {
 			r := domain.NotificationRecipient{
 				NotificationID: n.ID,
@@ -179,14 +184,14 @@ func (s *NotificationService) SendToUsersViaTopics(ctx context.Context, n domain
 		return nil
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 
 	if s.fcm != nil {
 		go s.pushTopicsAsync(context.Background(), n, topics)
 	}
 
-	return &n, len(userIDs), nil
+	return &n, recipients, nil
 }
 
 // pushTopicsAsync sends n to every device subscribed to each topic in topics,

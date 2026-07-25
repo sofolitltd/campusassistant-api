@@ -28,6 +28,14 @@ func notifyAssociationFollowers(ctx context.Context, db *gorm.DB, notificationSe
 		return nil
 	}
 
+	followerIDs, err := service.FilterMutedRecipients(ctx, db, followerIDs, "association", "association")
+	if err != nil {
+		return err
+	}
+	if len(followerIDs) == 0 {
+		return nil
+	}
+
 	// Deep-link route naming presumed to mirror Club's singular "/club/:id"
 	// convention ("/association/:id") — confirm against the actual Flutter
 	// GoRouter once mobile-side work for this feature starts.

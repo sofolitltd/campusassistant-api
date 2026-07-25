@@ -8,16 +8,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type MerchantHandler struct {
+	db              *gorm.DB
 	repo            domain.MerchantRepository
 	productRepo     domain.ProductRepository
 	notificationSvc *service.NotificationService
 }
 
-func NewMerchantHandler(repo domain.MerchantRepository, productRepo domain.ProductRepository, notificationSvc *service.NotificationService) *MerchantHandler {
-	return &MerchantHandler{repo: repo, productRepo: productRepo, notificationSvc: notificationSvc}
+func NewMerchantHandler(db *gorm.DB, repo domain.MerchantRepository, productRepo domain.ProductRepository, notificationSvc *service.NotificationService) *MerchantHandler {
+	return &MerchantHandler{db: db, repo: repo, productRepo: productRepo, notificationSvc: notificationSvc}
 }
 
 // GetAllMerchants is the admin listing, optionally filtered by ?status=.
@@ -123,8 +125,13 @@ func (h *MerchantHandler) notifyMerchantStatus(c *gin.Context, id uuid.UUID, app
 			body += " Reason: " + merchant.RejectionReason
 		}
 	}
+	recipients, err := service.FilterMutedRecipients(c.Request.Context(), h.db, []uuid.UUID{merchant.UserID}, "marketplace", "MERCHANT_STATUS")
+	if err != nil || len(recipients) == 0 {
+		return
+	}
+
 	n := domain.Notification{Title: title, Body: body, Type: "MERCHANT_STATUS", Scope: "user"}
-	_, _, _ = h.notificationSvc.SendToUsers(c.Request.Context(), n, []uuid.UUID{merchant.UserID}, uuid.Nil)
+	_, _, _ = h.notificationSvc.SendToUsers(c.Request.Context(), n, recipients, uuid.Nil)
 }
 
 func (h *MerchantHandler) ApproveMerchant(c *gin.Context) {

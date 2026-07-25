@@ -68,22 +68,41 @@ func (s *DeviceTopicService) desiredTopics(ctx context.Context, userID uuid.UUID
 		return nil, err
 	}
 
+	// muted governs the geographic notification_preference categories
+	// (university/department/batch) — a user who muted one of these should
+	// not be subscribed to its topic at all, so a broadcast to it is never
+	// delivered to their device. "all" is deliberately exempt: it's shared
+	// infrastructure (also the only channel available to a future emergency
+	// sender), so it always stays subscribed regardless of preferences.
+	muted, err := loadMutedCategorySet(ctx, s.db, userID)
+	if err != nil {
+		return nil, err
+	}
+
 	topics := []string{allTopic}
 
 	if user.Student != nil {
-		topics = append(topics,
-			"university_"+user.Student.UniversityID.String(),
-			"department_"+user.Student.DepartmentID.String(),
-			"batch_"+user.Student.BatchID.String(),
-		)
+		if _, ok := muted["university"]; !ok {
+			topics = append(topics, "university_"+user.Student.UniversityID.String())
+		}
+		if _, ok := muted["department"]; !ok {
+			topics = append(topics, "department_"+user.Student.DepartmentID.String())
+		}
+		if _, ok := muted["batch"]; !ok {
+			topics = append(topics, "batch_"+user.Student.BatchID.String())
+		}
 		return topics, nil
 	}
 
 	if user.UniversityID != nil {
-		topics = append(topics, "university_"+user.UniversityID.String())
+		if _, ok := muted["university"]; !ok {
+			topics = append(topics, "university_"+user.UniversityID.String())
+		}
 	}
 	if user.DepartmentID != nil {
-		topics = append(topics, "department_"+user.DepartmentID.String())
+		if _, ok := muted["department"]; !ok {
+			topics = append(topics, "department_"+user.DepartmentID.String())
+		}
 	}
 	return topics, nil
 }

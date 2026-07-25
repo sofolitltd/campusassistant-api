@@ -112,6 +112,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.CR{},
 		&domain.Verification{},
 		&domain.Resource{},
+		&domain.ResourceRating{},
 		&domain.Transport{},
 		&domain.Attachment{},
 		&domain.Hall{},
@@ -179,6 +180,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.CareerCircularTarget{},
 		&domain.CareerJob{},
 		&domain.CareerReminder{},
+		&domain.NotificationMute{},
 	)
 	if err != nil {
 		return fmt.Errorf("AutoMigrate failed: %w", err)

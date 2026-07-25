@@ -30,6 +30,14 @@ func notifyClubFollowers(ctx context.Context, db *gorm.DB, notificationService *
 		return nil
 	}
 
+	followerIDs, err := service.FilterMutedRecipients(ctx, db, followerIDs, "club", "club")
+	if err != nil {
+		return err
+	}
+	if len(followerIDs) == 0 {
+		return nil
+	}
+
 	// Matches the Flutter app's actual GoRouter path (singular "club",
 	// nested under /club) — NOT "/clubs/...".
 	actionRoute := fmt.Sprintf("/club/%s", clubID)

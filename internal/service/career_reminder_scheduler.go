@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 // CareerReminderScheduler polls for due CareerReminders and delivers them as
@@ -19,14 +20,16 @@ import (
 // student's devices, at the cost of requiring connectivity at fire time
 // (same trade-off as every other push in this app).
 type CareerReminderScheduler struct {
+	db                  *gorm.DB
 	repo                domain.CareerRepository
 	notificationService *NotificationService
 	interval            time.Duration
 	batchSize           int
 }
 
-func NewCareerReminderScheduler(repo domain.CareerRepository, notificationService *NotificationService) *CareerReminderScheduler {
+func NewCareerReminderScheduler(db *gorm.DB, repo domain.CareerRepository, notificationService *NotificationService) *CareerReminderScheduler {
 	return &CareerReminderScheduler{
+		db:                  db,
 		repo:                repo,
 		notificationService: notificationService,
 		interval:            30 * time.Second,
@@ -68,6 +71,14 @@ func (s *CareerReminderScheduler) tick(ctx context.Context) {
 }
 
 func (s *CareerReminderScheduler) deliver(ctx context.Context, reminder domain.CareerReminder) error {
+	recipients, err := FilterMutedRecipients(ctx, s.db, []uuid.UUID{reminder.UserID}, "career", "career_reminder")
+	if err != nil {
+		return err
+	}
+	if len(recipients) == 0 {
+		return nil
+	}
+
 	actionRoute := "/career/reminders"
 	if reminder.JobID != nil {
 		actionRoute = fmt.Sprintf("/career/jobs/%s", *reminder.JobID)
@@ -88,6 +99,6 @@ func (s *CareerReminderScheduler) deliver(ctx context.Context, reminder domain.C
 		Scope: "user",
 		Data:  &dataJSON,
 	}
-	_, _, err = s.notificationService.SendToUsers(ctx, n, []uuid.UUID{reminder.UserID}, reminder.UserID)
+	_, _, err = s.notificationService.SendToUsers(ctx, n, recipients, reminder.UserID)
 	return err
 }

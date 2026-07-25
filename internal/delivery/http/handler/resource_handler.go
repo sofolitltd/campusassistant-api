@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ResourceHandler adds review-specific actions on top of GenericHandler.
@@ -89,6 +90,14 @@ func (h *ResourceHandler) notifyBatches(ctx context.Context, resource domain.Res
 		Distinct().
 		Pluck("user_id", &userIDs).Error; err != nil {
 		return err
+	}
+
+	userIDs, err := service.FilterMutedRecipients(ctx, h.db, userIDs, "study_material", "studyMaterial")
+	if err != nil {
+		return err
+	}
+	if len(userIDs) == 0 {
+		return nil
 	}
 
 	actionRoute := fmt.Sprintf("/study/courses/%s/%d?resourceId=%s&universityId=%s&departmentId=%s",
@@ -265,25 +274,130 @@ func (h *ResourceHandler) RejectResource(c *gin.Context) {
 // IncrementDownload bumps the download counter atomically.
 // POST /resources/:id/download
 func (h *ResourceHandler) IncrementDownload(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := uuid.Parse(idStr)
+	h.incrementCounter(c, "download_count")
+}
+
+// IncrementView bumps the view counter atomically.
+// POST /resources/:id/view
+func (h *ResourceHandler) IncrementView(c *gin.Context) {
+	h.incrementCounter(c, "view_count")
+}
+
+// incrementCounter does a single atomic SQL increment on the named column and
+// returns its new value — avoids the GetByID+Save race of a read-modify-write.
+func (h *ResourceHandler) incrementCounter(c *gin.Context, column string) {
+	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
 		return
 	}
 
-	resource, err := h.Usecase.GetByID(c.Request.Context(), id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
-		return
-	}
-
-	resource.DownloadCount++
-
-	if err := h.Usecase.Update(c.Request.Context(), resource); err != nil {
+	if err := h.db.WithContext(c.Request.Context()).
+		Model(&domain.Resource{}).Where("id = ?", id).
+		UpdateColumn(column, gorm.Expr(column+" + 1")).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"download_count": resource.DownloadCount})
+	var newValue int64
+	if err := h.db.WithContext(c.Request.Context()).
+		Model(&domain.Resource{}).Where("id = ?", id).
+		Select(column).Scan(&newValue).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{column: newValue})
+}
+
+// RateResource upserts the caller's 1-5 star rating and recomputes the
+// resource's rating_avg/rating_count aggregate from all ratings.
+// POST /resources/:id/rate  { "rating": 1-5 }
+func (h *ResourceHandler) RateResource(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	userID, exists := c.Get("user_id")
+	uid, ok := userID.(uuid.UUID)
+	if !exists || !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authentication required"})
+		return
+	}
+
+	var body struct {
+		Rating int `json:"rating" binding:"required,min=1,max=5"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "rating must be an integer between 1 and 5"})
+		return
+	}
+
+	var ratingAvg float64
+	var ratingCount int
+
+	err = h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		rating := domain.ResourceRating{ResourceID: id, UserID: uid, Rating: body.Rating}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "resource_id"}, {Name: "user_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"rating", "updated_at"}),
+		}).Create(&rating).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&domain.ResourceRating{}).
+			Where("resource_id = ?", id).
+			Select("COALESCE(AVG(rating), 0)", "COUNT(*)").
+			Row().Scan(&ratingAvg, &ratingCount); err != nil {
+			return err
+		}
+
+		return tx.Model(&domain.Resource{}).Where("id = ?", id).
+			Updates(map[string]interface{}{"rating_avg": ratingAvg, "rating_count": ratingCount}).Error
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"rating_avg":   ratingAvg,
+		"rating_count": ratingCount,
+		"your_rating":  body.Rating,
+	})
+}
+
+// GetMyRating returns the caller's own rating for a resource, if any — used
+// to pre-fill a star-rating widget. Returns your_rating: null when unrated.
+// GET /resources/:id/rating
+func (h *ResourceHandler) GetMyRating(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	userID, exists := c.Get("user_id")
+	uid, ok := userID.(uuid.UUID)
+	if !exists || !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authentication required"})
+		return
+	}
+
+	var rating domain.ResourceRating
+	err = h.db.WithContext(c.Request.Context()).
+		Where("resource_id = ? AND user_id = ?", id, uid).
+		First(&rating).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusOK, gin.H{"your_rating": nil})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"your_rating": rating.Rating})
 }

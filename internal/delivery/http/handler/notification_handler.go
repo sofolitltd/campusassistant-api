@@ -225,38 +225,53 @@ func (h *NotificationHandler) createNotifications(c *gin.Context, req createNoti
 		Data:     dataJSON,
 	}
 
+	// Note: userIDs is intentionally NOT run through
+	// service.FilterMutedRecipients here. scope=user admin sends are a
+	// targeted 1:1 message (support-style DM), not one of the 9 subscribable
+	// notification_preference categories — muting must never silently
+	// swallow direct admin communication. Broadcast scopes (batch/department/
+	// university/custom) are filtered at the FCM topic layer instead (see
+	// DeviceTopicService.desiredTopics), and every other push path
+	// (club/association/lost_found/career/marketplace/study_material) is
+	// filtered at its own call site before reaching NotificationService.
 	var sent *domain.Notification
-	var count int
+	var recipients []domain.NotificationRecipient
 	if topics := broadcastTopics(req); len(topics) > 0 {
-		sent, count, err = h.notificationService.SendToUsersViaTopics(c.Request.Context(), n, userIDs, adminID, topics)
+		sent, recipients, err = h.notificationService.SendToUsersViaTopics(c.Request.Context(), n, userIDs, adminID, topics)
 	} else {
-		sent, count, err = h.notificationService.SendToUsers(c.Request.Context(), n, userIDs, adminID)
+		sent, recipients, err = h.notificationService.SendToUsers(c.Request.Context(), n, userIDs, adminID)
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	count := len(recipients)
 
-	// Broadcast to connected WebSocket clients
+	// Broadcast to connected WebSocket clients. Each user gets their OWN
+	// NotificationRecipient.ID (not the shared Notification content-row ID)
+	// as "id", because that's what the REST API actually operates on
+	// (GetNotifications/MarkAsRead/DeleteNotification are all scoped to
+	// NotificationRecipient rows) — sending the content-row ID here used to
+	// make mark-as-read/delete 404 for any client acting on a WS-delivered id.
 	if h.notifHub != nil && sent != nil {
 		go func() {
-			payload := map[string]interface{}{
-				"type":    "new_notification",
-				"channel": "notifications",
-				"data": map[string]interface{}{
-					"id":         sent.ID.String(),
-					"title":      sent.Title,
-					"body":       sent.Body,
-					"type":       sent.Type,
-					"image_url":  sent.ImageURL,
-					"data":       sent.Data,
-					"created_at": sent.CreatedAt,
-					"is_read":    false,
-				},
-			}
-			raw, _ := json.Marshal(payload)
-			for _, uid := range userIDs {
-				h.notifHub.SendToUser(uid, raw)
+			for _, r := range recipients {
+				payload := map[string]interface{}{
+					"type":    "new_notification",
+					"channel": "notifications",
+					"data": map[string]interface{}{
+						"id":         r.ID.String(),
+						"title":      sent.Title,
+						"body":       sent.Body,
+						"type":       sent.Type,
+						"image_url":  sent.ImageURL,
+						"data":       sent.Data,
+						"created_at": sent.CreatedAt,
+						"is_read":    false,
+					},
+				}
+				raw, _ := json.Marshal(payload)
+				h.notifHub.SendToUser(r.UserID, raw)
 			}
 		}()
 	}
@@ -290,6 +305,31 @@ func (h *NotificationHandler) CreateAdminNotification(c *gin.Context) {
 	h.createNotifications(c, req, uuid.Nil)
 }
 
+// PreviewAdminNotification resolves the audience for req without sending
+// anything — same recipient-resolution logic as the real send, so the
+// admin dashboard can show "this will reach N users" before an admin
+// commits to what is otherwise an irreversible mass broadcast.
+func (h *NotificationHandler) PreviewAdminNotification(c *gin.Context) {
+	var req createNotificationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userIDs, err := h.resolveRecipients(c.Request.Context(), req)
+	if err != nil {
+		var verr *validationError
+		status := http.StatusInternalServerError
+		if errors.As(err, &verr) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"count": len(userIDs)})
+}
+
 // flatNotification is the shape the mobile app expects from GET /notifications:
 // content fields flattened together with this user's own read state, keyed by
 // their own NotificationRecipient row id (so mark-as-read/delete stay scoped to them).
@@ -304,8 +344,23 @@ type flatNotification struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
+// GetNotifications is paginated (?limit=&offset=, via the shared
+// parseLimitOffset default of 20/0, capped at 100) — a user's inbox
+// otherwise grows unbounded (one row per broadcast they were ever a
+// recipient of) and this endpoint would eventually return their entire
+// history on every app open.
 func (h *NotificationHandler) GetNotifications(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
+	limit, offset := parseLimitOffset(c)
+
+	var count int64
+	if err := h.db.WithContext(c.Request.Context()).
+		Table("notification_recipients").
+		Where("user_id = ?", userID).
+		Count(&count).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
 	results := make([]flatNotification, 0)
 	if err := h.db.WithContext(c.Request.Context()).
@@ -314,12 +369,14 @@ func (h *NotificationHandler) GetNotifications(c *gin.Context) {
 		Joins("JOIN notifications n ON n.id = nr.notification_id").
 		Where("nr.user_id = ?", userID).
 		Order("n.created_at DESC").
+		Limit(limit).
+		Offset(offset).
 		Scan(&results).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, results)
+	c.JSON(http.StatusOK, gin.H{"data": results, "count": count, "limit": limit, "offset": offset})
 }
 
 func (h *NotificationHandler) MarkAsRead(c *gin.Context) {
@@ -395,13 +452,36 @@ type adminNotificationRow struct {
 	ReadCount      int64 `json:"read_count"`
 }
 
+// GetAllAdminNotifications is paginated (?limit=&offset=) — both the content
+// row list and its recipient/read-count aggregation used to be unbounded
+// full-table scans that grew with total historical send volume; scoping the
+// count query to just the current page's notification IDs (instead of a
+// GROUP BY over the entire notification_recipients table every load) is a
+// real efficiency win on top of the pagination itself.
 func (h *NotificationHandler) GetAllAdminNotifications(c *gin.Context) {
+	limit, offset := parseLimitOffset(c)
+
+	var total int64
+	if err := h.db.WithContext(c.Request.Context()).
+		Model(&domain.Notification{}).
+		Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
 	var notifications []domain.Notification
 	if err := h.db.WithContext(c.Request.Context()).
 		Order("created_at desc").
+		Limit(limit).
+		Offset(offset).
 		Find(&notifications).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	notificationIDs := make([]uuid.UUID, len(notifications))
+	for i, n := range notifications {
+		notificationIDs[i] = n.ID
 	}
 
 	type recipientCount struct {
@@ -410,13 +490,16 @@ func (h *NotificationHandler) GetAllAdminNotifications(c *gin.Context) {
 		Read           int64
 	}
 	var counts []recipientCount
-	if err := h.db.WithContext(c.Request.Context()).
-		Table("notification_recipients").
-		Select("notification_id, COUNT(*) AS total, COUNT(*) FILTER (WHERE is_read) AS read").
-		Group("notification_id").
-		Scan(&counts).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+	if len(notificationIDs) > 0 {
+		if err := h.db.WithContext(c.Request.Context()).
+			Table("notification_recipients").
+			Select("notification_id, COUNT(*) AS total, COUNT(*) FILTER (WHERE is_read) AS read").
+			Where("notification_id IN ?", notificationIDs).
+			Group("notification_id").
+			Scan(&counts).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	countByID := make(map[uuid.UUID]recipientCount, len(counts))
 	for _, rc := range counts {
@@ -433,7 +516,7 @@ func (h *NotificationHandler) GetAllAdminNotifications(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, rows)
+	c.JSON(http.StatusOK, gin.H{"data": rows, "count": total, "limit": limit, "offset": offset})
 }
 
 func (h *NotificationHandler) DeleteAdminNotification(c *gin.Context) {

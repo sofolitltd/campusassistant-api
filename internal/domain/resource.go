@@ -87,3 +87,15 @@ type Resource struct {
 	// (opt-out, not opt-in) — nil vs explicit false is why this is a pointer.
 	Notify *bool `gorm:"-" json:"notify,omitempty"`
 }
+
+// ResourceRating is one user's 1-5 star rating of a Resource. Composite PK
+// (same shape as CommunityPostLike) so a re-rate upserts in place instead of
+// accumulating duplicate rows — Resource.RatingAvg/RatingCount are recomputed
+// from this table on every write.
+type ResourceRating struct {
+	ResourceID uuid.UUID `gorm:"type:uuid;primaryKey" json:"resource_id"`
+	UserID     uuid.UUID `gorm:"type:uuid;primaryKey" json:"user_id"`
+	Rating     int       `gorm:"not null" json:"rating"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}

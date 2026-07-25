@@ -201,6 +201,9 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		rg.PATCH("/:id/reject", resourceHandler.RejectResource)
 		// Engagement
 		rg.POST("/:id/download", resourceHandler.IncrementDownload)
+		rg.POST("/:id/view", resourceHandler.IncrementView)
+		rg.POST("/:id/rate", resourceHandler.RateResource)
+		rg.GET("/:id/rating", resourceHandler.GetMyRating)
 	}
 
 	registerRoutes[domain.Transport](v1, db, "transports")
@@ -469,7 +472,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// state transitions/checks, not plain field updates.
 	merchantRepo := postgres.NewMerchantRepository(db)
 	productRepo := postgres.NewProductRepository(db)
-	merchantHandler := handler.NewMerchantHandler(merchantRepo, productRepo, notificationService)
+	merchantHandler := handler.NewMerchantHandler(db, merchantRepo, productRepo, notificationService)
 	v1.GET("/merchants/platform", merchantHandler.GetPlatformMerchant)
 	merchantGroup := v1.Group("/merchants")
 	{
@@ -628,6 +631,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	{
 		adminNotifGroup.GET("", notificationHandler.GetAllAdminNotifications)
 		adminNotifGroup.POST("", notificationHandler.CreateAdminNotification)
+		adminNotifGroup.POST("/preview", notificationHandler.PreviewAdminNotification)
 		adminNotifGroup.DELETE("/:id", notificationHandler.DeleteAdminNotification)
 	}
 
@@ -636,7 +640,18 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	notifGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
 		notifGroup.GET("", notificationHandler.GetNotifications)
-		notifGroup.POST("", notificationHandler.CreateNotification)
+		// CreateNotification lets a caller target an arbitrary scope
+		// (batch/department/university/custom) — restricted to staff-ish
+		// roles so a plain student account can't broadcast to an entire
+		// university. CreateAdminNotification (API-key-only, used by the
+		// admin dashboard) is a separate, already-trusted path.
+		notifGroup.POST("", middleware.RoleMiddleware(
+			string(domain.RoleSuperAdmin),
+			string(domain.RoleUniversityAdmin),
+			string(domain.RoleDepartmentAdmin),
+			string(domain.RoleTeacher),
+			string(domain.RoleStaff),
+		), notificationHandler.CreateNotification)
 		notifGroup.POST("/:id/read", notificationHandler.MarkAsRead)
 		notifGroup.POST("/read-all", notificationHandler.MarkAllAsRead)
 		notifGroup.DELETE("/:id", notificationHandler.DeleteNotification)
@@ -653,6 +668,15 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		deviceGroup.DELETE("/:id", deviceHandler.RemoveDevice)
 		deviceGroup.POST("/logout-all", deviceHandler.LogoutAll)
 		deviceGroup.POST("/logout-others", deviceHandler.LogoutOthers)
+	}
+
+	// Notification preference (mute-by-category) Routes — require JWT
+	notifPrefHandler := handler.NewNotificationPreferenceHandler(db, deviceTopicService)
+	notifPrefGroup := v1.Group("/my/notification-preferences")
+	notifPrefGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		notifPrefGroup.GET("", notifPrefHandler.GetMyPreferences)
+		notifPrefGroup.PUT("/:category", notifPrefHandler.UpdatePreference)
 	}
 
 	// Chat Routes
@@ -695,7 +719,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	// Lost & Found Portal
 	lostFoundRepo := postgres.NewLostFoundRepository(db)
-	lostFoundHandler := handler.NewLostFoundHandler(lostFoundRepo, chatUsecase, notificationService)
+	lostFoundHandler := handler.NewLostFoundHandler(db, lostFoundRepo, chatUsecase, notificationService)
 
 	registerRoutes[domain.LostFoundCategory](v1, db, "lost-found-categories")
 
@@ -786,7 +810,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// Poll for due reminders and push them via FCM — server-driven delivery
 	// instead of a client-scheduled local alarm, so it survives reinstalls/
 	// reboots and works across a student's devices.
-	service.NewCareerReminderScheduler(careerRepo, notificationService).Start(context.Background())
+	service.NewCareerReminderScheduler(db, careerRepo, notificationService).Start(context.Background())
 
 	return r
 }
