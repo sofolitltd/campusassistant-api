@@ -4,4 +4,3 @@ server.log
 *.log
 /main
 firebase-service-account.json
-campusassistant-api
