@@ -53,6 +53,11 @@ type User struct {
 	// Academic Batch (populated from Student.Batch for convenience, not a DB column)
 	Batch string `gorm:"-" json:"batch"`
 
+	// Hall/Blood group (populated from Student for convenience, not DB
+	// columns — these only live on the Student row). See GetMe.
+	Hall  string `gorm:"-" json:"hall"`
+	Blood string `gorm:"-" json:"blood"`
+
 	// SubscriptionStatus is "pro" or "basic", computed from IsPro/ProExpiry —
 	// not a DB column. Populated via ComputeSubscriptionStatus() wherever a
 	// full User is serialized to a client (see auth_handler.go GetMe/Login).

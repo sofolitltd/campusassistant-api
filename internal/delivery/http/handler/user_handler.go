@@ -36,6 +36,7 @@ func (h *UserHandler) UpdateMyUser(c *gin.Context) {
 		FirstName string `json:"first_name"`
 		LastName  string `json:"last_name"`
 		AvatarURL string `json:"avatar_url"`
+		Gender    string `json:"gender"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -50,6 +51,9 @@ func (h *UserHandler) UpdateMyUser(c *gin.Context) {
 	}
 	if req.AvatarURL != "" {
 		user.AvatarURL = req.AvatarURL
+	}
+	if req.Gender != "" {
+		user.Gender = req.Gender
 	}
 
 	if err := h.usecase.Update(c.Request.Context(), user); err != nil {
