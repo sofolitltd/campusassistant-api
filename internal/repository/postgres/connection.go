@@ -106,6 +106,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.Session{},
 		&domain.Batch{},
 		&domain.User{},
+		&domain.Admin{},
 		&domain.Student{},
 		&domain.Teacher{},
 		&domain.Staff{},

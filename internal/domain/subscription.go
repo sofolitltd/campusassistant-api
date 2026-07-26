@@ -36,7 +36,7 @@ type UserSubscription struct {
 	User      User      `gorm:"foreignKey:UserID" json:"user"`
 	PlanID    uuid.UUID `gorm:"type:uuid;not null" json:"plan_id"`
 	Plan      string    `gorm:"size:50;not null" json:"plan"` // Cached title
-	Price     float64   `gorm:"-" json:"price"`               // Populated via join, not stored
+	Price     float64   `json:"price"`
 	StartDate time.Time `json:"start_date"`
 	// EndDate is nil for a Lifetime plan — mirrors User.ProExpiry, and the
 	// expiry worker's `pro_expiry < now` query already treats NULL as
@@ -56,6 +56,6 @@ type SubscriptionRepository interface {
 	UpdatePlan(ctx context.Context, plan *SubscriptionPlan) error
 	DeletePlan(ctx context.Context, id uuid.UUID) error
 
-	GetAllSubscriptions(ctx context.Context, offset, limit int) ([]UserSubscription, int64, error)
+	GetAllSubscriptions(ctx context.Context, offset, limit int) ([]UserSubscription, int64, float64, error)
 	ExpireSubscriptions(ctx context.Context) (int64, error)
 }

@@ -49,6 +49,17 @@ func (r *subscriptionRepository) GetUserSubscription(ctx context.Context, userID
 
 func (r *subscriptionRepository) CreateUserSubscription(ctx context.Context, sub *domain.UserSubscription) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Cache plan data at purchase time so edits don't change historical records
+		var plan domain.SubscriptionPlan
+		if err := tx.First(&plan, "id = ?", sub.PlanID).Error; err == nil {
+			if sub.Price == 0 {
+				sub.Price = float64(plan.Price)
+			}
+			if sub.Plan == "" {
+				sub.Plan = plan.Title
+			}
+		}
+
 		// 1. Create the subscription record
 		if err := tx.Create(sub).Error; err != nil {
 			return err
@@ -90,18 +101,20 @@ func (r *subscriptionRepository) DeletePlan(ctx context.Context, id uuid.UUID) e
 	return r.db.WithContext(ctx).Delete(&domain.SubscriptionPlan{}, id).Error
 }
 
-func (r *subscriptionRepository) GetAllSubscriptions(ctx context.Context, offset, limit int) ([]domain.UserSubscription, int64, error) {
+func (r *subscriptionRepository) GetAllSubscriptions(ctx context.Context, offset, limit int) ([]domain.UserSubscription, int64, float64, error) {
 	var subs []domain.UserSubscription
 	var count int64
+	var totalRevenue float64
+
 	r.db.WithContext(ctx).Model(&domain.UserSubscription{}).Count(&count)
+	r.db.WithContext(ctx).Model(&domain.UserSubscription{}).Select("COALESCE(SUM(price), 0)").Scan(&totalRevenue)
+
 	err := r.db.WithContext(ctx).
 		Preload("User").
-		Select("user_subscriptions.*, COALESCE(subscription_plans.price, 0) as price").
-		Joins("LEFT JOIN subscription_plans ON subscription_plans.id = user_subscriptions.plan_id").
-		Order("user_subscriptions.created_at desc").
+		Order("start_date desc").
 		Offset(offset).Limit(limit).
 		Find(&subs).Error
-	return subs, count, err
+	return subs, count, totalRevenue, err
 }
 
 func (r *subscriptionRepository) ExpireSubscriptions(ctx context.Context) (int64, error) {

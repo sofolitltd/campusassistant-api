@@ -2,6 +2,7 @@ package handler
 
 import (
 	"campusassistant-api/internal/domain"
+	"campusassistant-api/internal/repository/postgres"
 	"campusassistant-api/pkg/auth"
 	"errors"
 	"net/http"
@@ -17,14 +18,16 @@ type AuthHandler struct {
 	db                *gorm.DB
 	jwtManager        *auth.JWTManager
 	accessTokenExpiry int // in minutes
+	adminRepo         *postgres.AdminRepository
 }
 
 // NewAuthHandler creates a new auth handler
-func NewAuthHandler(db *gorm.DB, jwtManager *auth.JWTManager, accessTokenExpiry int) *AuthHandler {
+func NewAuthHandler(db *gorm.DB, jwtManager *auth.JWTManager, accessTokenExpiry int, adminRepo *postgres.AdminRepository) *AuthHandler {
 	return &AuthHandler{
 		db:                db,
 		jwtManager:        jwtManager,
 		accessTokenExpiry: accessTokenExpiry,
+		adminRepo:         adminRepo,
 	}
 }
 
@@ -214,6 +217,75 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		RefreshToken: refreshToken,
 		User:         user,
 		ExpiresIn:    int64(h.accessTokenExpiry * 60),
+	})
+}
+
+// AdminLogin godoc
+// @Summary Admin login
+// @Description Authenticate admin with email and password against admins table
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body LoginRequest true "Admin credentials"
+// @Success 200 {object} AuthResponse
+// @Failure 401 {object} map[string]string
+// @Router /auth/admin-login [post]
+func (h *AuthHandler) AdminLogin(c *gin.Context) {
+	var req LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	admin, err := h.adminRepo.FindByEmail(strings.ToLower(req.Email))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
+
+	if !admin.IsActive {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Account is deactivated"})
+		return
+	}
+
+	if err := auth.VerifyPassword(admin.PasswordHash, req.Password); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
+		return
+	}
+
+	accessToken, err := h.jwtManager.GenerateAccessToken(
+		admin.ID,
+		admin.Email,
+		admin.Role,
+		nil,
+		nil,
+		1,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})
+		return
+	}
+
+	refreshToken, err := h.jwtManager.GenerateRefreshToken(admin.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate refresh token"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"expires_in":    int64(h.accessTokenExpiry * 60),
+		"admin": gin.H{
+			"id":    admin.ID,
+			"email": admin.Email,
+			"name":  admin.Name,
+			"role":  admin.Role,
+		},
 	})
 }
 

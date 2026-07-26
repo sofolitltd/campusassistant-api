@@ -47,16 +47,26 @@ func JWTMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 		}
 
 		var currentTokenVersion int
-		if err := db.Table("users").Select("token_version").Where("id = ?", claims.UserID).Scan(&currentTokenVersion).Error; err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
-			return
+		if claims.Role == "super_admin" || claims.Role == "admin" {
+			var exists int
+			err = db.Table("admins").Select("1").Where("id = ? AND is_active = true", claims.UserID).Scan(&exists).Error
+			if err != nil || exists == 0 {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Admin not found"})
+				return
+			}
+			currentTokenVersion = 1
+		} else {
+			err = db.Table("users").Select("token_version").Where("id = ?", claims.UserID).Scan(&currentTokenVersion).Error
+			if err != nil || currentTokenVersion == 0 {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+				return
+			}
 		}
 		if currentTokenVersion != claims.TokenVersion {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Session expired, please login again"})
 			return
 		}
 
-		// Set user information in context
 		c.Set("user_id", claims.UserID)
 		c.Set("user_email", claims.Email)
 		c.Set("user_role", claims.Role)

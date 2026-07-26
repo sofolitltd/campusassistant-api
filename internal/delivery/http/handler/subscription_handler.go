@@ -93,12 +93,12 @@ func (h *SubscriptionHandler) DeletePlan(c *gin.Context) {
 func (h *SubscriptionHandler) GetAllSubscriptions(c *gin.Context) {
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	subs, count, err := h.repo.GetAllSubscriptions(c.Request.Context(), offset, limit)
+	subs, count, totalRevenue, err := h.repo.GetAllSubscriptions(c.Request.Context(), offset, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch subscriptions"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": subs, "count": count, "offset": offset, "limit": limit})
+	c.JSON(http.StatusOK, gin.H{"data": subs, "count": count, "total_revenue": totalRevenue, "offset": offset, "limit": limit})
 }
 
 func (h *SubscriptionHandler) CreateSubscription(c *gin.Context) {

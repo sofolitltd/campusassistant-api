@@ -74,15 +74,16 @@ func (r *statsRepository) GetDashboardStats(ctx context.Context) (*domain.Dashbo
 			FirstName string
 			LastName  string
 			Plan      string
+			Price     float64
 			StartDate time.Time
-			EndDate   *time.Time // nil = Lifetime plan, never expires
+			EndDate   *time.Time
 		}
 		var rows []subRow
 		r.db.WithContext(ctx).
 			Table("user_subscriptions").
-			Select("user_subscriptions.user_id, users.first_name, users.last_name, user_subscriptions.plan, user_subscriptions.start_date, user_subscriptions.end_date").
+			Select("user_subscriptions.user_id, users.first_name, users.last_name, user_subscriptions.plan, user_subscriptions.price, user_subscriptions.start_date, user_subscriptions.end_date").
 			Joins("JOIN users ON users.id = user_subscriptions.user_id").
-			Order("user_subscriptions.created_at DESC").
+			Order("user_subscriptions.start_date DESC").
 			Limit(5).
 			Find(&rows)
 
@@ -95,8 +96,9 @@ func (r *statsRepository) GetDashboardStats(ctx context.Context) (*domain.Dashbo
 				UserID: row.UserID,
 				Name:   row.FirstName + " " + row.LastName,
 				Plan:   row.Plan,
+				Price:  row.Price,
 				Status: status,
-				Date:   row.StartDate.Format("2006-01-02"),
+				Date:   row.StartDate.Format("02/01/2006"),
 			})
 		}
 	}

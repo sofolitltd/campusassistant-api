@@ -57,11 +57,13 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	v1 := r.Group("/api/v1")
 
 	// Public Auth Routes (No API Key or JWT required)
-	authHandler := handler.NewAuthHandler(db, jwtManager, cfg.JWTAccessTokenExpiry)
+	adminRepo := postgres.NewAdminRepository(db)
+	authHandler := handler.NewAuthHandler(db, jwtManager, cfg.JWTAccessTokenExpiry, adminRepo)
 	authGroup := v1.Group("/auth")
 	{
 		authGroup.POST("/register", authHandler.Register)
 		authGroup.POST("/login", authHandler.Login)
+		authGroup.POST("/admin-login", authHandler.AdminLogin)
 		authGroup.POST("/refresh", authHandler.RefreshToken)
 		// Protected route - requires JWT
 		authGroup.GET("/me", middleware.JWTMiddleware(jwtManager, db), authHandler.GetMe)
@@ -87,6 +89,18 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	// Protected Routes (Require API Key for now, can add JWT later)
 	v1.Use(middleware.APIKeyMiddleware(cfg.APIKey))
+
+	// Admin management (requires JWT)
+	adminHandler := handler.NewAdminHandler(adminRepo)
+	adminsGroup := v1.Group("/admins")
+	adminsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		adminsGroup.GET("", adminHandler.List)
+		adminsGroup.POST("", adminHandler.Create)
+		adminsGroup.PUT("/:id", adminHandler.Update)
+		adminsGroup.PUT("/:id/password", adminHandler.ChangePassword)
+		adminsGroup.DELETE("/:id", adminHandler.Delete)
+	}
 
 	// Helper to register generic routes
 	registerRoutes[domain.University](v1, db, "universities")
@@ -811,6 +825,13 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// instead of a client-scheduled local alarm, so it survives reinstalls/
 	// reboots and works across a student's devices.
 	service.NewCareerReminderScheduler(db, careerRepo, notificationService).Start(context.Background())
+
+	// Global search: one round trip across resources, notices, courses,
+	// clubs, associations, teachers, staff, marketplace products, lost &
+	// found items, and career circulars.
+	searchRepo := postgres.NewSearchRepository(db)
+	searchHandler := handler.NewSearchHandler(searchRepo)
+	v1.GET("/search", searchHandler.Search)
 
 	return r
 }
