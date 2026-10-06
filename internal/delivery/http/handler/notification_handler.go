@@ -234,47 +234,53 @@ func (h *NotificationHandler) createNotifications(c *gin.Context, req createNoti
 	// DeviceTopicService.desiredTopics), and every other push path
 	// (club/association/lost_found/career/marketplace/study_material) is
 	// filtered at its own call site before reaching NotificationService.
-	var sent *domain.Notification
+	// Broadcast to connected WebSocket clients, once the fan-out this
+	// notification triggered has actually committed (SendToUsers/
+	// SendToUsersViaTopics persist in the background — see their doc
+	// comments — and only call this back after the write succeeds). Each
+	// user gets their OWN NotificationRecipient.ID (not the shared
+	// Notification content-row ID) as "id", because that's what the REST API
+	// actually operates on (GetNotifications/MarkAsRead/DeleteNotification
+	// are all scoped to NotificationRecipient rows) — sending the
+	// content-row ID here used to make mark-as-read/delete 404 for any
+	// client acting on a WS-delivered id. Waiting for the commit (rather
+	// than firing this the moment IDs are known) is what keeps that
+	// guarantee even though persistence itself is now async.
+	broadcastWS := func(sent domain.Notification, recipients []domain.NotificationRecipient) {
+		if h.notifHub == nil {
+			return
+		}
+		for _, r := range recipients {
+			payload := map[string]interface{}{
+				"type":    "new_notification",
+				"channel": "notifications",
+				"data": map[string]interface{}{
+					"id":         r.ID.String(),
+					"title":      sent.Title,
+					"body":       sent.Body,
+					"type":       sent.Type,
+					"image_url":  sent.ImageURL,
+					"data":       sent.Data,
+					"created_at": sent.CreatedAt,
+					"is_read":    false,
+				},
+			}
+			raw, _ := json.Marshal(payload)
+			h.notifHub.SendToUser(r.UserID, raw)
+		}
+	}
+
 	var recipients []domain.NotificationRecipient
 	if topics := broadcastTopics(req); len(topics) > 0 {
-		sent, recipients, err = h.notificationService.SendToUsersViaTopics(c.Request.Context(), n, userIDs, adminID, topics)
+		_, recipients, err = h.notificationService.SendToUsersViaTopics(c.Request.Context(), n, userIDs, adminID, topics, broadcastWS)
 	} else {
-		sent, recipients, err = h.notificationService.SendToUsers(c.Request.Context(), n, userIDs, adminID)
+		_, recipients, err = h.notificationService.SendToUsers(c.Request.Context(), n, userIDs, adminID, broadcastWS)
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	count := len(recipients)
-
-	// Broadcast to connected WebSocket clients. Each user gets their OWN
-	// NotificationRecipient.ID (not the shared Notification content-row ID)
-	// as "id", because that's what the REST API actually operates on
-	// (GetNotifications/MarkAsRead/DeleteNotification are all scoped to
-	// NotificationRecipient rows) — sending the content-row ID here used to
-	// make mark-as-read/delete 404 for any client acting on a WS-delivered id.
-	if h.notifHub != nil && sent != nil {
-		go func() {
-			for _, r := range recipients {
-				payload := map[string]interface{}{
-					"type":    "new_notification",
-					"channel": "notifications",
-					"data": map[string]interface{}{
-						"id":         r.ID.String(),
-						"title":      sent.Title,
-						"body":       sent.Body,
-						"type":       sent.Type,
-						"image_url":  sent.ImageURL,
-						"data":       sent.Data,
-						"created_at": sent.CreatedAt,
-						"is_read":    false,
-					},
-				}
-				raw, _ := json.Marshal(payload)
-				h.notifHub.SendToUser(r.UserID, raw)
-			}
-		}()
-	}
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "Notifications sent",

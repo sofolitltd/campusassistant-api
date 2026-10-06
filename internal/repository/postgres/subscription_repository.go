@@ -52,7 +52,9 @@ func (r *subscriptionRepository) CreateUserSubscription(ctx context.Context, sub
 		// Cache plan data at purchase time so edits don't change historical records
 		var plan domain.SubscriptionPlan
 		if err := tx.First(&plan, "id = ?", sub.PlanID).Error; err == nil {
-			if sub.Price == 0 {
+			// Auto-fill price from plan only for paid grants (payment/coupon).
+			// Admin grants explicitly set price=0 and must not be overridden.
+			if sub.Price == 0 && sub.GrantReason != "admin_grant" {
 				sub.Price = float64(plan.Price)
 			}
 			if sub.Plan == "" {
@@ -130,10 +132,13 @@ func (r *subscriptionRepository) ExpireSubscriptions(ctx context.Context) (int64
 		return 0, err
 	}
 
-	// Batch update status to false
+	// Batch update status to false and clear the expiry date for clean data
 	result := r.db.WithContext(ctx).Model(&domain.User{}).
 		Where("id IN ?", expiredUserIDs).
-		Update("is_pro", false)
+		Updates(map[string]interface{}{
+			"is_pro":     false,
+			"pro_expiry": nil,
+		})
 		
 	return result.RowsAffected, result.Error
 }

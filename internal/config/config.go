@@ -21,6 +21,39 @@ type Config struct {
 
 	// API Security
 	APIKey string `mapstructure:"API_KEY"`
+	// APIKeyRequired makes every /api/v1 request carry X-API-Key. Defaults to
+	// true (current behaviour). The key is compiled into the mobile app, so
+	// it identifies a client but cannot secure anything — set this false once
+	// ACCESS_ENFORCE=true and the app no longer ships the key (the server
+	// refuses to start with both off outside development). The admin
+	// dashboard's server-side proxy keeps sending it either way.
+	APIKeyRequired bool `mapstructure:"API_KEY_REQUIRED"`
+	// CORSAllowedOrigins is a comma-separated list of browser origins allowed
+	// to call the API (the Flutter web app, etc.). BKASH_CALLBACK_BASE_URL's
+	// origin is always included. Empty in production means "no other origin".
+	CORSAllowedOrigins string `mapstructure:"CORS_ALLOWED_ORIGINS"`
+	// TrustedProxies is a comma-separated list of proxy IPs/CIDRs whose
+	// X-Forwarded-For is believed (e.g. your reverse proxy). Rate limiting
+	// keys on the client IP, so leaving this unset lets anyone spoof it.
+	TrustedProxies string `mapstructure:"TRUSTED_PROXIES"`
+	// RateLimit* — in-memory, per instance. 0 disables a limiter.
+	RateLimitPerMinute     int `mapstructure:"RATE_LIMIT_PER_MINUTE"`      // all requests, per client IP
+	RateLimitAuthPerMinute int `mapstructure:"RATE_LIMIT_AUTH_PER_MINUTE"` // login/register/refresh, per client IP
+	RateLimitPayPerMinute  int `mapstructure:"RATE_LIMIT_PAY_PER_MINUTE"`  // payment endpoints, per user
+	// AccessEnforce turns per-route access policies from log-only into
+	// blocking. Defaults on in development; production sets it explicitly
+	// after a log-only window has shown the classification is right.
+	AccessEnforce bool `mapstructure:"ACCESS_ENFORCE"`
+
+	// SMTP (transactional email — password reset codes). All optional:
+	// if host/username/password are absent the mailer degrades to logging
+	// instead of sending, exactly like FCM does without credentials.
+	SMTPHost      string `mapstructure:"SMTP_HOST"`
+	SMTPPort      string `mapstructure:"SMTP_PORT"`
+	SMTPUsername  string `mapstructure:"SMTP_USERNAME"`
+	SMTPPassword  string `mapstructure:"SMTP_PASSWORD"`
+	SMTPFromEmail string `mapstructure:"SMTP_FROM_EMAIL"`
+	SMTPFromName  string `mapstructure:"SMTP_FROM_NAME"`
 
 	// Migrations
 	DBAutoMigrate bool `mapstructure:"DB_AUTO_MIGRATE"`
@@ -68,6 +101,19 @@ func LoadConfig() (*Config, error) {
 	v.BindEnv("R2_ACCOUNT_ID")
 	v.BindEnv("R2_PUBLIC_URL")
 	v.BindEnv("API_KEY")
+	v.BindEnv("ACCESS_ENFORCE")
+	v.BindEnv("API_KEY_REQUIRED")
+	v.BindEnv("CORS_ALLOWED_ORIGINS")
+	v.BindEnv("TRUSTED_PROXIES")
+	v.BindEnv("RATE_LIMIT_PER_MINUTE")
+	v.BindEnv("RATE_LIMIT_AUTH_PER_MINUTE")
+	v.BindEnv("RATE_LIMIT_PAY_PER_MINUTE")
+	v.BindEnv("SMTP_HOST")
+	v.BindEnv("SMTP_PORT")
+	v.BindEnv("SMTP_USERNAME")
+	v.BindEnv("SMTP_PASSWORD")
+	v.BindEnv("SMTP_FROM_EMAIL")
+	v.BindEnv("SMTP_FROM_NAME")
 	v.BindEnv("JWT_SECRET")
 	v.BindEnv("JWT_ACCESS_TOKEN_EXPIRY")
 	v.BindEnv("JWT_REFRESH_TOKEN_EXPIRY")
@@ -88,6 +134,11 @@ func LoadConfig() (*Config, error) {
 	// Default values
 	v.SetDefault("PORT", "8080")
 	v.SetDefault("ENVIRONMENT", "development")
+	v.SetDefault("ACCESS_ENFORCE", false)
+	v.SetDefault("API_KEY_REQUIRED", true)
+	v.SetDefault("RATE_LIMIT_PER_MINUTE", 600)
+	v.SetDefault("RATE_LIMIT_AUTH_PER_MINUTE", 30)
+	v.SetDefault("RATE_LIMIT_PAY_PER_MINUTE", 30)
 	v.SetDefault("JWT_ACCESS_TOKEN_EXPIRY", 60)   // 1 hour
 	v.SetDefault("JWT_REFRESH_TOKEN_EXPIRY", 168) // 7 days (168 hours)
 	v.SetDefault("FIREBASE_CREDENTIALS_FILE", "./firebase-service-account.json")
@@ -111,4 +162,15 @@ func LoadConfig() (*Config, error) {
 	config.DatabaseURL = strings.TrimSpace(config.DatabaseURL)
 
 	return &config, nil
+}
+
+// SplitList splits a comma-separated env value, dropping blanks.
+func SplitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

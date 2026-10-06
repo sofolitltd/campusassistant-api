@@ -27,15 +27,30 @@ func NewNotificationService(db *gorm.DB, fcmClient *fcm.Client) *NotificationSer
 
 const recipientBatchSize = 100
 
+// onCommitted is invoked once a fan-out's rows are durably committed, with
+// the persisted content row and its recipients. Callers that need to act on
+// a *committed* row (chiefly: the WebSocket broadcast in
+// notification_handler.go, which hands each client a NotificationRecipient.ID
+// that a follow-up mark-as-read/delete call must actually find) pass one in;
+// everything else can ignore it.
+type onCommitted func(domain.Notification, []domain.NotificationRecipient)
+
 // SendToUsers creates n as a single content row and inserts one
-// NotificationRecipient per user, atomically. No-ops (returns nil, nil, nil)
-// if userIDs is empty. n.ID/CreatedByID/UpdatedByID are set by this call.
-// The returned recipients (one per user, in no guaranteed order) let callers
-// — e.g. the WebSocket broadcast in notification_handler.go — address each
-// user by their own NotificationRecipient.ID, which is what the REST API
-// (GetNotifications/MarkAsRead/DeleteNotification) actually operates on, as
-// opposed to the shared Notification content-row ID.
-func (s *NotificationService) SendToUsers(ctx context.Context, n domain.Notification, userIDs []uuid.UUID, createdBy uuid.UUID) (*domain.Notification, []domain.NotificationRecipient, error) {
+// NotificationRecipient per user. No-ops (returns nil, nil, nil) if userIDs
+// is empty. n.ID/CreatedByID/UpdatedByID and every recipient's ID are
+// generated here, client-side, before any DB call — so the returned values
+// are fully known immediately and callers never have to wait on the write to
+// get IDs to respond/broadcast with.
+//
+// The actual DB write (and push) happens in the background: at broadcast
+// scope this can be one row per user in the system, and a synchronous
+// transaction of that size would make the admin's request latency scale with
+// audience size for no reason, since nothing in the row content depends on
+// the write having happened. notifyFns[0], if given, only fires after the
+// write actually commits — so anything gated on "the row exists" (the WS
+// broadcast) still can't race ahead of it; a failed commit is logged and
+// simply never fires it.
+func (s *NotificationService) SendToUsers(ctx context.Context, n domain.Notification, userIDs []uuid.UUID, createdBy uuid.UUID, notifyFns ...onCommitted) (*domain.Notification, []domain.NotificationRecipient, error) {
 	if len(userIDs) == 0 {
 		return nil, nil, nil
 	}
@@ -45,22 +60,47 @@ func (s *NotificationService) SendToUsers(ctx context.Context, n domain.Notifica
 	n.UpdatedByID = createdBy
 
 	recipients := make([]domain.NotificationRecipient, 0, len(userIDs))
+	for _, uid := range userIDs {
+		r := domain.NotificationRecipient{
+			NotificationID: n.ID,
+			UserID:         uid,
+		}
+		r.ID = uuid.New()
+		r.CreatedByID = createdBy
+		r.UpdatedByID = createdBy
+		recipients = append(recipients, r)
+	}
+
+	go s.persistAndNotify(context.Background(), n, recipients, firstOrNil(notifyFns))
+	if s.fcm != nil {
+		go s.pushAsync(context.Background(), n, userIDs)
+	}
+
+	return &n, recipients, nil
+}
+
+func firstOrNil(fns []onCommitted) onCommitted {
+	if len(fns) == 0 {
+		return nil
+	}
+	return fns[0]
+}
+
+// persistAndNotify runs the transaction SendToUsers/SendToUsersViaTopics used
+// to do inline, then calls notify (if given) once it has actually committed.
+// Runs in its own goroutine with a background context — the HTTP request
+// that triggered it has already been responded to by the time this runs.
+func (s *NotificationService) persistAndNotify(ctx context.Context, n domain.Notification, recipients []domain.NotificationRecipient, notify onCommitted) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("[notification persist] panic: %v", r)
+		}
+	}()
+
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&n).Error; err != nil {
 			return err
 		}
-
-		for _, uid := range userIDs {
-			r := domain.NotificationRecipient{
-				NotificationID: n.ID,
-				UserID:         uid,
-			}
-			r.ID = uuid.New()
-			r.CreatedByID = createdBy
-			r.UpdatedByID = createdBy
-			recipients = append(recipients, r)
-		}
-
 		for i := 0; i < len(recipients); i += recipientBatchSize {
 			end := i + recipientBatchSize
 			if end > len(recipients) {
@@ -73,17 +113,17 @@ func (s *NotificationService) SendToUsers(ctx context.Context, n domain.Notifica
 		return nil
 	})
 	if err != nil {
-		return nil, nil, err
+		// The admin's request already returned success (the row content
+		// never depended on the write). This is the one place that failure
+		// is now only visible in logs — same trade-off the codebase already
+		// accepts for push delivery below.
+		logger.Errorf("[notification persist] failed to persist notification %s (%d recipients): %v", n.ID, len(recipients), err)
+		return
 	}
 
-	if s.fcm != nil {
-		// Fire-and-forget: push delivery must never fail or slow down
-		// notification creation. Use context.Background() since the
-		// request's ctx is cancelled once the HTTP response is written.
-		go s.pushAsync(context.Background(), n, userIDs)
+	if notify != nil {
+		notify(n, recipients)
 	}
-
-	return &n, recipients, nil
 }
 
 // pushAsync looks up device tokens for userIDs and sends n via FCM, pruning
@@ -146,7 +186,7 @@ func (s *NotificationService) pushAsync(ctx context.Context, n domain.Notificati
 // no need to fan out per-token. A custom multi-target send may imply several
 // topics (one per distinct target row); each gets its own FCM publish call,
 // still just one DB write for the notification/recipients.
-func (s *NotificationService) SendToUsersViaTopics(ctx context.Context, n domain.Notification, userIDs []uuid.UUID, createdBy uuid.UUID, topics []string) (*domain.Notification, []domain.NotificationRecipient, error) {
+func (s *NotificationService) SendToUsersViaTopics(ctx context.Context, n domain.Notification, userIDs []uuid.UUID, createdBy uuid.UUID, topics []string, notifyFns ...onCommitted) (*domain.Notification, []domain.NotificationRecipient, error) {
 	if len(userIDs) == 0 {
 		return nil, nil, nil
 	}
@@ -156,37 +196,18 @@ func (s *NotificationService) SendToUsersViaTopics(ctx context.Context, n domain
 	n.UpdatedByID = createdBy
 
 	recipients := make([]domain.NotificationRecipient, 0, len(userIDs))
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&n).Error; err != nil {
-			return err
+	for _, uid := range userIDs {
+		r := domain.NotificationRecipient{
+			NotificationID: n.ID,
+			UserID:         uid,
 		}
-
-		for _, uid := range userIDs {
-			r := domain.NotificationRecipient{
-				NotificationID: n.ID,
-				UserID:         uid,
-			}
-			r.ID = uuid.New()
-			r.CreatedByID = createdBy
-			r.UpdatedByID = createdBy
-			recipients = append(recipients, r)
-		}
-
-		for i := 0; i < len(recipients); i += recipientBatchSize {
-			end := i + recipientBatchSize
-			if end > len(recipients) {
-				end = len(recipients)
-			}
-			if err := tx.Create(recipients[i:end]).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, nil, err
+		r.ID = uuid.New()
+		r.CreatedByID = createdBy
+		r.UpdatedByID = createdBy
+		recipients = append(recipients, r)
 	}
 
+	go s.persistAndNotify(context.Background(), n, recipients, firstOrNil(notifyFns))
 	if s.fcm != nil {
 		go s.pushTopicsAsync(context.Background(), n, topics)
 	}

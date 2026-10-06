@@ -20,7 +20,8 @@ func NewBkashHandler(payments *service.PaymentService) *BkashHandler {
 }
 
 type createBkashPaymentRequest struct {
-	PlanID uuid.UUID `json:"plan_id" binding:"required"`
+	PlanID      uuid.UUID `json:"plan_id" binding:"required"`
+	CouponCode  string    `json:"coupon_code"`
 }
 
 // CreatePayment starts a bKash checkout session for the authenticated user.
@@ -35,17 +36,62 @@ func (h *BkashHandler) CreatePayment(c *gin.Context) {
 		return
 	}
 
-	result, err := h.payments.CreatePayment(c.Request.Context(), userID, req.PlanID)
+	result, err := h.payments.CreatePayment(c.Request.Context(), userID, req.PlanID, req.CouponCode)
 	if err != nil {
-		if errors.Is(err, service.ErrPlanNotFound) {
+		switch {
+		case errors.Is(err, service.ErrPlanNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription plan not found"})
-			return
+		case errors.Is(err, service.ErrCouponNotFound):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid coupon code"})
+		case errors.Is(err, service.ErrCouponExpired):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Coupon code has expired"})
+		case errors.Is(err, service.ErrCouponExhausted):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Coupon code has reached its usage limit"})
+		case errors.Is(err, service.ErrCouponMinAmount):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "This coupon does not apply to the selected plan"})
+		case errors.Is(err, service.ErrCouponPlanMismatch):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "This coupon does not apply to the selected plan"})
+		default:
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to start bKash payment: " + err.Error()})
 		}
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to start bKash payment: " + err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+type cancelBkashPaymentRequest struct {
+	PaymentID string `json:"payment_id" binding:"required"`
+}
+
+// CancelPayment marks the user's initiated payment as cancelled so it shows
+// "Cancelled" in their history rather than dangling as "Pending" forever.
+// Best-effort: if the transaction cannot be found or already completed,
+// the call is a no-op.
+func (h *BkashHandler) CancelPayment(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+
+	var req cancelBkashPaymentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	err := h.payments.CancelPayment(c.Request.Context(), userID, req.PaymentID)
+	if err != nil {
+		if errors.Is(err, service.ErrTransactionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Payment not found"})
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "This payment does not belong to you"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cancel payment"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Payment cancelled"})
 }
 
 type executeBkashPaymentRequest struct {

@@ -213,8 +213,8 @@ func (h *ResourceHandler) ApproveResource(c *gin.Context) {
 		return
 	}
 
-	// TODO: FCM — send push notification to resource.UploaderUID
-	// notificationService.Send(resource.UploaderUID, "Your submission was approved! 🎉", resource.Title)
+	// TODO: FCM — send push notification to resource.CreatedByID
+	// notificationService.SendToUser(resource.CreatedByID, "Your submission was approved!", resource.Title)
 
 	if notify && !wasPublished && len(batchIDs) > 0 {
 		if err := h.notifyBatches(c.Request.Context(), *resource, batchIDs, adminID); err != nil {
@@ -265,8 +265,8 @@ func (h *ResourceHandler) RejectResource(c *gin.Context) {
 		return
 	}
 
-	// TODO: FCM — send push notification to resource.UploaderUID
-	// notificationService.Send(resource.UploaderUID, "Your submission needs revision ❌", body.Reason)
+	// TODO: FCM — send push notification to resource.CreatedByID
+	// notificationService.SendToUser(resource.CreatedByID, "Your submission needs revision", body.Reason)
 
 	c.JSON(http.StatusOK, resource)
 }

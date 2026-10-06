@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
+	"campusassistant-api/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -40,7 +42,12 @@ type OrderHandler struct {
 	merchantRepo domain.MerchantRepository
 	addressRepo  domain.AddressRepository
 	paymentSvc   *service.MarketplacePaymentService
+	orderSvc     *service.OrderService
+	commission   *service.CommissionService // optional; nil uses each merchant's own rate
 }
+
+// SetCommission enables the new-seller promotional commission at checkout.
+func (h *OrderHandler) SetCommission(c *service.CommissionService) { h.commission = c }
 
 func NewOrderHandler(
 	orderRepo domain.OrderRepository,
@@ -48,6 +55,7 @@ func NewOrderHandler(
 	merchantRepo domain.MerchantRepository,
 	addressRepo domain.AddressRepository,
 	paymentSvc *service.MarketplacePaymentService,
+	orderSvc *service.OrderService,
 ) *OrderHandler {
 	return &OrderHandler{
 		orderRepo:    orderRepo,
@@ -55,7 +63,32 @@ func NewOrderHandler(
 		merchantRepo: merchantRepo,
 		addressRepo:  addressRepo,
 		paymentSvc:   paymentSvc,
+		orderSvc:     orderSvc,
 	}
+}
+
+// writeTransitionError maps OrderService errors onto HTTP statuses.
+func writeTransitionError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrOrderNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
+	case errors.Is(err, service.ErrForbidden):
+		c.JSON(http.StatusForbidden, gin.H{"error": "You do not own this order"})
+	case errors.Is(err, service.ErrInvalidTransition), errors.Is(err, service.ErrOrderNotCancellable):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order status"})
+	}
+}
+
+// actorID is the signed-in user, or uuid.Nil when the guard doesn't set one.
+func actorID(c *gin.Context) uuid.UUID {
+	if v, ok := c.Get("user_id"); ok {
+		if id, ok := v.(uuid.UUID); ok {
+			return id
+		}
+	}
+	return uuid.Nil
 }
 
 // ==============================
@@ -101,8 +134,8 @@ func (h *OrderHandler) UpdateOrderStatus(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.orderRepo.UpdateStatus(c.Request.Context(), id, req.Status); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order status"})
+	if err := h.orderSvc.Transition(c.Request.Context(), id, req.Status, actorID(c)); err != nil {
+		writeTransitionError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Order status updated"})
@@ -149,6 +182,9 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 			merchant, err := h.merchantRepo.GetMerchantByID(c.Request.Context(), product.MerchantID)
 			if err == nil {
 				commissionRate = merchant.CommissionRate
+				if h.commission != nil {
+					commissionRate = h.commission.EffectiveRate(c.Request.Context(), merchant)
+				}
 			}
 		}
 
@@ -189,7 +225,13 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		Items:                 items,
 	}
 
-	if err := h.orderRepo.Create(c.Request.Context(), order); err != nil {
+	if err := h.orderSvc.PlaceOrder(c.Request.Context(), order); err != nil {
+		var stockErr *service.StockError
+		if errors.As(err, &stockErr) {
+			c.JSON(http.StatusConflict, gin.H{"error": stockErr.Error()})
+			return
+		}
+		logger.Errorf("[orders] checkout failed for user %s: %v", userID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create order"})
 		return
 	}
@@ -226,6 +268,22 @@ func (h *OrderHandler) GetMyOrder(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, order)
+}
+
+// CancelMyOrder lets the buyer cancel an order that hasn't shipped and, for
+// bKash, hasn't been paid.
+func (h *OrderHandler) CancelMyOrder(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid order id"})
+		return
+	}
+	if err := h.orderSvc.CancelByBuyer(c.Request.Context(), userID, id); err != nil {
+		writeTransitionError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Order cancelled"})
 }
 
 // ListMerchantOrders returns every order containing at least one item sold
@@ -327,8 +385,15 @@ func (h *OrderHandler) MerchantUpdateOrderStatus(c *gin.Context) {
 		return
 	}
 
-	if err := h.orderRepo.UpdateStatus(c.Request.Context(), orderID, req.Status); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update order status"})
+	// A merchant can only fulfil an order that has actually been paid for —
+	// otherwise "delivered" on an unpaid bKash order would release earnings
+	// for money that never arrived.
+	if order.Status == domain.OrderStatusPendingPayment || order.Status == domain.OrderStatusCancelled {
+		c.JSON(http.StatusConflict, gin.H{"error": "Order is not paid or has been cancelled"})
+		return
+	}
+	if err := h.orderSvc.Transition(c.Request.Context(), orderID, req.Status, userID); err != nil {
+		writeTransitionError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Order status updated"})
@@ -349,6 +414,8 @@ func (h *OrderHandler) CreateMarketplacePayment(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Order not found"})
 		case service.ErrForbidden:
 			c.JSON(http.StatusForbidden, gin.H{"error": "You do not own this order"})
+		case service.ErrOrderNotPayable:
+			c.JSON(http.StatusConflict, gin.H{"error": "This order is not awaiting bKash payment"})
 		default:
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		}

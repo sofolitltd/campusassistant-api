@@ -45,11 +45,8 @@ type Resource struct {
 	ReviewedByID *uuid.UUID          `gorm:"type:uuid;index" json:"reviewed_by_id,omitempty"`
 	ReviewedAt   *time.Time          `json:"reviewed_at,omitempty"`
 
-	// Uploader
-	UploaderID   *uuid.UUID `gorm:"type:uuid;index" json:"uploader_id,omitempty"`
-	UploaderUID  string     `gorm:"size:128;index" json:"uploader_uid"`
-	UploaderName string     `gorm:"size:100" json:"uploader_name"`
-	Uploader     *User      `gorm:"foreignKey:UploaderID" json:"uploader,omitempty"`
+	// Creator (resolved from CreatedByID on read)
+	Creator *User `gorm:"foreignKey:CreatedByID" json:"creator,omitempty"`
 
 	// Org Relations
 	DepartmentID uuid.UUID `gorm:"type:uuid;index" json:"department_id"`

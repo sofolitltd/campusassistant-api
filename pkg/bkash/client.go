@@ -261,3 +261,53 @@ func (c *Client) ExecutePayment(ctx context.Context, paymentID string) (*Execute
 
 	return &result, nil
 }
+
+// QueryPaymentResult mirrors bKash's payment-status response. It has the same
+// shape as ExecutePaymentResult, but is read-only: querying never changes
+// the payment, so it is safe to call as often as reconciliation needs.
+type QueryPaymentResult = ExecutePaymentResult
+
+// QueryPayment asks bKash for the current state of a payment session without
+// executing it. This is how a payment whose execute call was lost (app
+// killed after the user paid, network drop on the response) is recovered:
+// the transactionStatus here is as authoritative as the execute response.
+func (c *Client) QueryPayment(ctx context.Context, paymentID string) (*QueryPaymentResult, error) {
+	idToken, err := c.grantToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := json.Marshal(map[string]string{"paymentID": paymentID})
+	if err != nil {
+		return nil, fmt.Errorf("bkash: encode query payment request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/tokenized/checkout/payment/status", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("bkash: build query payment request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", idToken)
+	req.Header.Set("X-App-Key", c.appKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("bkash: query payment request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("bkash: read query payment response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bkash: query payment returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result QueryPaymentResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("bkash: decode query payment response: %w (body: %s)", err, string(respBody))
+	}
+	return &result, nil
+}

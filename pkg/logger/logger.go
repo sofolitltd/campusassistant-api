@@ -31,6 +31,10 @@ func Infof(template string, args ...interface{}) {
 	Log.Sugar().Infof(template, args...)
 }
 
+func Warnf(template string, args ...interface{}) {
+	Log.Sugar().Warnf(template, args...)
+}
+
 func Errorf(template string, args ...interface{}) {
 	Log.Sugar().Errorf(template, args...)
 }

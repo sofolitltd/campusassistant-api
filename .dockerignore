@@ -5,7 +5,6 @@
 .gitignore
 README.md
 PLAN.md
-vercel.json
 api_tests.rest
 auth_tests.rest
 makefile

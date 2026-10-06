@@ -111,6 +111,9 @@ func (r *SearchRepository) searchResources(ctx context.Context, like string, uni
 	if err := q.Preload("Batches").Order("resources.created_at desc").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
+	if err := attachResourceCreators(ctx, r.db, rows); err != nil {
+		return nil, 0, err
+	}
 	return rows, len(rows), nil
 }
 

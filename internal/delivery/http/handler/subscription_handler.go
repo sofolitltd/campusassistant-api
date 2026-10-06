@@ -1,21 +1,54 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
 	"campusassistant-api/internal/domain"
+	"campusassistant-api/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
 type SubscriptionHandler struct {
-	repo domain.SubscriptionRepository
+	repo    domain.SubscriptionRepository
+	payments *service.PaymentService
 }
 
-func NewSubscriptionHandler(repo domain.SubscriptionRepository) *SubscriptionHandler {
-	return &SubscriptionHandler{repo: repo}
+func NewSubscriptionHandler(repo domain.SubscriptionRepository, payments *service.PaymentService) *SubscriptionHandler {
+	return &SubscriptionHandler{repo: repo, payments: payments}
+}
+
+type adminGrantProRequest struct {
+	UserID uuid.UUID `json:"user_id" binding:"required"`
+	PlanID uuid.UUID `json:"plan_id" binding:"required"`
+	Note   string    `json:"note"`
+}
+
+// AdminGrantPro grants a subscription to a user without payment. Only
+// admins with the appropriate role can call this.
+func (h *SubscriptionHandler) AdminGrantPro(c *gin.Context) {
+	adminID := c.MustGet("user_id").(uuid.UUID)
+
+	var req adminGrantProRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	sub, err := h.payments.AdminGrantPro(c.Request.Context(), adminID, req.UserID, req.PlanID, req.Note)
+	if err != nil {
+		if errors.Is(err, service.ErrPlanNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription plan not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to grant subscription: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, sub)
 }
 
 func (h *SubscriptionHandler) GetPlans(c *gin.Context) {
@@ -33,6 +66,16 @@ func (h *SubscriptionHandler) GetPlans(c *gin.Context) {
 
 func (h *SubscriptionHandler) GetUserSubscription(c *gin.Context) {
 	userID, _ := uuid.Parse(c.Param("uid"))
+
+	// Own subscription, or an admin. Without this any logged-in user could
+	// read any other user's subscription by guessing/collecting ids.
+	callerID, _ := c.Get("user_id")
+	callerRole, _ := c.Get("user_role")
+	role, _ := callerRole.(string)
+	if id, ok := callerID.(uuid.UUID); !ok || (id != userID && role != "admin" && role != "super_admin") {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You can only view your own subscription"})
+		return
+	}
 
 	sub, err := h.repo.GetUserSubscription(c.Request.Context(), userID)
 	if err != nil {

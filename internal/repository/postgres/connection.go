@@ -22,7 +22,8 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 	gormConfig := &gorm.Config{
 		Logger:                 logger.Default.LogMode(logger.Warn),
 		PrepareStmt:            false,
-		SkipDefaultTransaction: true,
+		SkipDefaultTransaction:             true,
+		DisableForeignKeyConstraintWhenMigrating: true,
 	}
 
 	if cfg.Environment == "production" {
@@ -107,6 +108,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.Batch{},
 		&domain.User{},
 		&domain.Admin{},
+		&domain.PasswordReset{},
 		&domain.Student{},
 		&domain.Teacher{},
 		&domain.Staff{},
@@ -125,6 +127,15 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.SubscriptionTarget{},
 		&domain.UserSubscription{},
 		&domain.BkashTransaction{},
+		&domain.Journal{},
+		&domain.LedgerEntry{},
+		&domain.Invoice{},
+		&domain.InvoiceLine{},
+		&domain.InvoiceCounter{},
+		&domain.MerchantPayout{},
+		&domain.Refund{},
+		&domain.PlanEntitlement{},
+		&domain.UsageCounter{},
 		&domain.Routine{},
 		&domain.Organization{},
 		&domain.Alumni{},
@@ -171,6 +182,10 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.Order{},
 		&domain.OrderItem{},
 		&domain.OrderTransaction{},
+		&domain.OrderEvent{},
+		&domain.ProductReview{},
+		&domain.WishlistItem{},
+		&domain.CommissionPolicy{},
 		&domain.LostFoundCategory{},
 		&domain.LostFoundItem{},
 		&domain.LostFoundItemTarget{},
@@ -182,6 +197,10 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.CareerJob{},
 		&domain.CareerReminder{},
 		&domain.NotificationMute{},
+		&domain.CouponCode{},
+		&domain.Feedback{},
+		&domain.UserReward{},
+		&domain.RewardTransaction{},
 	)
 	if err != nil {
 		return fmt.Errorf("AutoMigrate failed: %w", err)
@@ -209,6 +228,15 @@ func RunMigrations(db *gorm.DB) error {
 	}
 	if db.Migrator().HasColumn("contacts", "department_id") {
 		db.Migrator().DropColumn("contacts", "department_id")
+	}
+
+	// Drop legacy uploader columns from resources (migrated to created_by_id FK)
+	if db.Migrator().HasTable("resources") {
+		for _, col := range []string{"uploader_id", "uploader_uid", "uploader_name"} {
+			if db.Migrator().HasColumn("resources", col) {
+				db.Migrator().DropColumn("resources", col)
+			}
+		}
 	}
 
 	// Backfill organizational IDs on existing community posts (new columns

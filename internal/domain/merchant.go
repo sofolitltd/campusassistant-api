@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -29,8 +30,8 @@ type Merchant struct {
 	// their uploaded ID proofs.
 	User         *User  `gorm:"-" json:"user,omitempty"`
 	BusinessName string `gorm:"size:255;not null" json:"business_name"`
-	Description  string    `gorm:"type:text" json:"description"`
-	LogoURL      string    `gorm:"size:500" json:"logo_url"`
+	Description  string `gorm:"type:text" json:"description"`
+	LogoURL      string `gorm:"size:500" json:"logo_url"`
 	// BusinessType is a free-text category (e.g. "Food & Beverage",
 	// "Electronics") — shown publicly on the merchant's storefront, unlike
 	// Phone/Email which are contact details for admin use only (see
@@ -53,8 +54,24 @@ type Merchant struct {
 	// PayoutMethod/PayoutAccount is where commission-adjusted revenue is
 	// actually sent — distinct from Phone/Email, which are just contact
 	// details. Admin-only visibility, same as Phone/Email.
-	PayoutMethod  string `gorm:"size:20" json:"payout_method,omitempty"`  // e.g. "bkash", "nagad", "bank"
+	PayoutMethod  string `gorm:"size:20" json:"payout_method,omitempty"`   // e.g. "bkash", "nagad", "bank"
 	PayoutAccount string `gorm:"size:255" json:"payout_account,omitempty"` // account/wallet number
+
+	// Review aggregates across all of this merchant's products. Read-only
+	// through GORM ("->"); ReviewService recomputes them with raw SQL.
+	RatingAvg   float64 `gorm:"->;default:0" json:"rating_avg"`
+	RatingCount int     `gorm:"->;default:0" json:"rating_count"`
+
+	// Fulfilment reputation: average hours from an order going live to the
+	// seller shipping it, over their most recent shipped orders. Maintained
+	// by OrderService when an order ships; read-only through GORM.
+	AvgShipHours float64 `gorm:"->;default:0" json:"avg_ship_hours"`
+	ShippedCount int     `gorm:"->;default:0" json:"shipped_count"`
+
+	// ApprovedAt is when an admin approved the application; the new-seller
+	// commission promo counts from it (CreatedAt for merchants approved before
+	// this field existed). Set by the repository on approval, read-only here.
+	ApprovedAt *time.Time `gorm:"->" json:"approved_at,omitempty"`
 }
 
 // MerchantRepository is dedicated (not generic CRUD) because approval/

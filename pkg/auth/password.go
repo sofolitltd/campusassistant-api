@@ -32,6 +32,25 @@ func HashPassword(password string) (string, error) {
 	return string(hashedBytes), nil
 }
 
+// HashCode hashes a short one-time code (e.g. a 6-digit password-reset code).
+//
+// It is HashPassword without the length check: a 6-character code would be
+// rejected by MinPasswordLength, but bcrypt is still the right primitive here
+// precisely because the code is low-entropy — a fast hash of six digits is
+// trivially reversible if the database leaks.
+func HashCode(code string) (string, error) {
+	hashedBytes, err := bcrypt.GenerateFromPassword([]byte(code), BcryptCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hashedBytes), nil
+}
+
+// VerifyCode compares a plain one-time code with its bcrypt hash.
+func VerifyCode(hashedCode, code string) error {
+	return VerifyPassword(hashedCode, code)
+}
+
 // VerifyPassword compares a plain text password with a hashed password
 func VerifyPassword(hashedPassword, password string) error {
 	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))

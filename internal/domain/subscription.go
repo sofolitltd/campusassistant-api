@@ -32,16 +32,21 @@ type SubscriptionTarget struct {
 // UserSubscription links a user to their active subscription plan.
 type UserSubscription struct {
 	Base
-	UserID    uuid.UUID `gorm:"type:uuid;not null;index" json:"user_id"`
-	User      User      `gorm:"foreignKey:UserID" json:"user"`
-	PlanID    uuid.UUID `gorm:"type:uuid;not null" json:"plan_id"`
-	Plan      string    `gorm:"size:50;not null" json:"plan"` // Cached title
-	Price     float64   `json:"price"`
-	StartDate time.Time `json:"start_date"`
+	UserID      uuid.UUID  `gorm:"type:uuid;not null;index" json:"user_id"`
+	User        User       `gorm:"foreignKey:UserID" json:"user"`
+	PlanID      uuid.UUID  `gorm:"type:uuid;not null" json:"plan_id"`
+	Plan        string     `gorm:"size:50;not null" json:"plan"` // Cached title
+	Price       float64    `json:"price"`
+	StartDate   time.Time  `json:"start_date"`
+	GrantedBy   *uuid.UUID `gorm:"type:uuid;index" json:"granted_by,omitempty"`            // admin user ID who granted this, nil for self-purchased
+	GrantReason string     `gorm:"size:30;not null;default:'payment'" json:"grant_reason"` // "payment", "admin_grant", "coupon"
 	// EndDate is nil for a Lifetime plan — mirrors User.ProExpiry, and the
 	// expiry worker's `pro_expiry < now` query already treats NULL as
 	// "never expires" per normal SQL semantics.
 	EndDate *time.Time `json:"end_date"`
+	// RefundedAt is set when the payment behind this subscription was
+	// refunded; the subscription no longer counts toward Pro status.
+	RefundedAt *time.Time `json:"refunded_at,omitempty"`
 }
 
 // SubscriptionRepository defines database operations for subscriptions.

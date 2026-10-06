@@ -13,6 +13,14 @@ const (
 	BkashStatusCompleted BkashTransactionStatus = "completed"
 	BkashStatusFailed    BkashTransactionStatus = "failed"
 	BkashStatusCancelled BkashTransactionStatus = "cancelled"
+	// BkashStatusNeedsReview marks a payment bKash reports as completed but
+	// that we refused to fulfil automatically (amount mismatch, order since
+	// cancelled, ...). Money moved, so an admin must decide — the
+	// reconciliation job never touches these rows.
+	BkashStatusNeedsReview BkashTransactionStatus = "needs_review"
+	// BkashStatusRefunded: the money was returned to the payer (recorded by
+	// an admin, see BillingService.RefundSubscriptionPayment/RefundOrder).
+	BkashStatusRefunded BkashTransactionStatus = "refunded"
 )
 
 // BkashTransaction is the server-side audit trail + idempotency key for a
@@ -28,7 +36,18 @@ type BkashTransaction struct {
 	PaymentID string                 `gorm:"uniqueIndex;not null" json:"payment_id"`
 	TrxID     string                 `json:"trx_id"`
 	Amount    int                    `gorm:"not null" json:"amount"`
-	Status    BkashTransactionStatus `gorm:"type:varchar(20);default:'initiated'" json:"status"`
+	// OriginalAmount is the full plan price before any coupon discount —
+	// stored separately so the transaction history always shows both the
+	// charged amount and what the plan normally costs.
+	OriginalAmount int                    `gorm:"not null;default:0" json:"original_amount"`
+	CouponCodeID   *uuid.UUID             `gorm:"type:uuid;index" json:"coupon_code_id,omitempty"`
+	// CouponReserved is true while this transaction holds one use of its
+	// coupon (taken atomically at checkout, released if the payment dies).
+	CouponReserved bool `gorm:"not null;default:false" json:"-"`
+	// SubscriptionID is the UserSubscription this payment produced — lets a
+	// repeated execute return the same subscription instead of guessing.
+	SubscriptionID *uuid.UUID `gorm:"type:uuid;index" json:"subscription_id,omitempty"`
+	Status         BkashTransactionStatus `gorm:"type:varchar(20);default:'initiated'" json:"status"`
 	// RawResponse is the last bKash JSON response seen for this transaction —
 	// kept for support/debugging, never parsed back out.
 	RawResponse string `gorm:"type:text" json:"-"`

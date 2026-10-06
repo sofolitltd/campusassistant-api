@@ -1,9 +1,11 @@
 package postgres
 
 import (
-	"campusassistant-api/internal/domain"
 	"context"
 
+	"campusassistant-api/internal/domain"
+
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -17,6 +19,45 @@ func NewResourceRepository(db *gorm.DB) domain.Repository[domain.Resource] {
 		Repository: NewGormRepository[domain.Resource](db),
 		db:         db,
 	}
+}
+
+// attachResourceCreators back-fills Resource.Creator from
+// users.id = resources.created_by_id.
+//
+// This is an explicit IN query instead of a GORM association preload because
+// the association is unreliable: User embeds Base (which has a CreatedByID
+// field), so GORM's belongs-to resolution for `Creator *User
+// gorm:"foreignKey:CreatedByID"` picks users.created_by_id as the reference
+// column and the preload silently matches nothing. A manual query is the least
+// surprising fix and keeps the created_by_id column on the Resource read path
+// untouched.
+func attachResourceCreators(ctx context.Context, db *gorm.DB, entities []domain.Resource) error {
+	ids := make([]uuid.UUID, 0, len(entities))
+	for _, e := range entities {
+		if e.CreatedByID != uuid.Nil {
+			ids = append(ids, e.CreatedByID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	var users []domain.User
+	if err := db.WithContext(ctx).Where("id IN ?", ids).Find(&users).Error; err != nil {
+		return err
+	}
+
+	userMap := make(map[uuid.UUID]*domain.User, len(users))
+	for i := range users {
+		userMap[users[i].ID] = &users[i]
+	}
+
+	for i := range entities {
+		if u, ok := userMap[entities[i].CreatedByID]; ok {
+			entities[i].Creator = u
+		}
+	}
+	return nil
 }
 
 func (r *resourceRepository) Create(ctx context.Context, entity *domain.Resource) error {
@@ -100,9 +141,6 @@ func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]inter
 		db = db.Where("resources.status = ?", domain.ResourceStatusPublished)
 	}
 
-	// ── Uploader filter (for "My Submissions" screen) ────────────────────────
-	// uploader_uid is a string filter — handled generically below.
-
 	// ── Apply remaining filters ──────────────────────────────────────────────
 	for key, value := range filter {
 		switch key {
@@ -135,6 +173,8 @@ func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]inter
 		return nil, 0, err
 	}
 
+	// Creator is back-filled via attachResourceCreators below — the GORM
+	// association preload matches nothing (see attachResourceCreators).
 	err := db.Preload("Batches").
 		Order("resources.created_at DESC").
 		Limit(limit).Offset(offset).
@@ -143,5 +183,25 @@ func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]inter
 		return nil, 0, err
 	}
 
+	if err := attachResourceCreators(ctx, r.db, entities); err != nil {
+		return nil, 0, err
+	}
+
 	return entities, count, nil
+}
+
+func (r *resourceRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Resource, error) {
+	var entity domain.Resource
+	// Batches only — Creator is back-filled manually. Preload(clause.Associations)
+	// would also attempt the broken Creator association (nil result).
+	if err := r.db.WithContext(ctx).Preload("Batches").First(&entity, "id = ?", id).Error; err != nil {
+		return nil, err
+	}
+
+	entities := []domain.Resource{entity}
+	if err := attachResourceCreators(ctx, r.db, entities); err != nil {
+		return nil, err
+	}
+	entity = entities[0]
+	return &entity, nil
 }

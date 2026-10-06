@@ -25,6 +25,7 @@ func (r *orderRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Or
 	var order domain.Order
 	err := r.db.WithContext(ctx).
 		Preload("Items").
+		Preload("Events", func(db *gorm.DB) *gorm.DB { return db.Order("created_at asc") }).
 		First(&order, "id = ?", id).Error
 	if err != nil {
 		return nil, err

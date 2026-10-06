@@ -2,8 +2,10 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"campusassistant-api/internal/domain"
+	"campusassistant-api/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -12,7 +14,11 @@ import (
 type ProductHandler struct {
 	repo         domain.ProductRepository
 	merchantRepo domain.MerchantRepository
+	wishlist     *service.WishlistService // optional; nil skips saved-product alerts
 }
+
+// SetWishlist enables back-in-stock and price-drop alerts to users who saved a product.
+func (h *ProductHandler) SetWishlist(w *service.WishlistService) { h.wishlist = w }
 
 func NewProductHandler(repo domain.ProductRepository, merchantRepo domain.MerchantRepository) *ProductHandler {
 	return &ProductHandler{repo: repo, merchantRepo: merchantRepo}
@@ -73,6 +79,7 @@ func (h *ProductHandler) UpdateProduct(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
 		return
 	}
+	before := *product
 	if err := c.ShouldBindJSON(product); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -82,6 +89,7 @@ func (h *ProductHandler) UpdateProduct(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update product"})
 		return
 	}
+	h.wishlist.NotifyProductChange(c.Request.Context(), before, *product)
 	c.JSON(http.StatusOK, product)
 }
 
@@ -100,17 +108,37 @@ func (h *ProductHandler) DeleteProduct(c *gin.Context) {
 
 // GetProductsByLocation is the app-facing browse endpoint: published
 // products that are global (no targets) or targeted to this
-// university/department. Optional ?category_id= filters by category.
+// university/department. Optional filters: ?category_id=, ?merchant_id=,
+// ?q= (title/description), ?min_price=, ?max_price=, ?in_stock=true,
+// ?featured=true (admin-featured only), ?sort=new|price_asc|price_desc|top_rated|popular and ?limit=&offset= for
+// paging. The body is always a bare JSON array (older app builds rely on
+// that); the match count ignoring paging is in the X-Total-Count header.
 func (h *ProductHandler) GetProductsByLocation(c *gin.Context) {
-	universityID, _ := uuid.Parse(c.Query("university_id"))
-	departmentID, _ := uuid.Parse(c.Query("department_id"))
-	categoryID, _ := uuid.Parse(c.Query("category_id"))
+	f := domain.ProductFilter{Query: c.Query("q"), Sort: domain.ProductSort(c.Query("sort"))}
+	f.UniversityID, _ = uuid.Parse(c.Query("university_id"))
+	f.DepartmentID, _ = uuid.Parse(c.Query("department_id"))
+	f.CategoryID, _ = uuid.Parse(c.Query("category_id"))
+	f.MerchantID, _ = uuid.Parse(c.Query("merchant_id"))
+	f.MinPrice, _ = strconv.Atoi(c.Query("min_price"))
+	f.MaxPrice, _ = strconv.Atoi(c.Query("max_price"))
+	f.InStock = c.Query("in_stock") == "true"
+	f.FeaturedOnly = c.Query("featured") == "true"
+	if l, err := strconv.Atoi(c.Query("limit")); err == nil && l > 0 {
+		if l > 100 {
+			l = 100
+		}
+		f.Limit = l
+	}
+	if o, err := strconv.Atoi(c.Query("offset")); err == nil && o > 0 {
+		f.Offset = o
+	}
 
-	products, err := h.repo.GetProductsByLocation(c.Request.Context(), universityID, departmentID, categoryID)
+	products, total, err := h.repo.SearchProducts(c.Request.Context(), f)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch products"})
 		return
 	}
+	c.Header("X-Total-Count", strconv.FormatInt(total, 10))
 	c.JSON(http.StatusOK, products)
 }
 
@@ -198,6 +226,7 @@ func (h *ProductHandler) UpdateMyProduct(c *gin.Context) {
 
 	// Bind JSON onto the already-fetched row (not a blank struct) so a
 	// partial payload doesn't zero out fields the caller omitted.
+	before := *existing
 	if err := c.ShouldBindJSON(existing); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -208,6 +237,7 @@ func (h *ProductHandler) UpdateMyProduct(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update product"})
 		return
 	}
+	h.wishlist.NotifyProductChange(c.Request.Context(), before, *existing)
 	c.JSON(http.StatusOK, existing)
 }
 

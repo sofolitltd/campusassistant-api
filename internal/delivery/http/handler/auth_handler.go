@@ -4,6 +4,7 @@ import (
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/repository/postgres"
 	"campusassistant-api/pkg/auth"
+	"campusassistant-api/pkg/mailer"
 	"errors"
 	"net/http"
 	"strings"
@@ -19,15 +20,17 @@ type AuthHandler struct {
 	jwtManager        *auth.JWTManager
 	accessTokenExpiry int // in minutes
 	adminRepo         *postgres.AdminRepository
+	mailer            mailer.Mailer
 }
 
 // NewAuthHandler creates a new auth handler
-func NewAuthHandler(db *gorm.DB, jwtManager *auth.JWTManager, accessTokenExpiry int, adminRepo *postgres.AdminRepository) *AuthHandler {
+func NewAuthHandler(db *gorm.DB, jwtManager *auth.JWTManager, accessTokenExpiry int, adminRepo *postgres.AdminRepository, mail mailer.Mailer) *AuthHandler {
 	return &AuthHandler{
 		db:                db,
 		jwtManager:        jwtManager,
 		accessTokenExpiry: accessTokenExpiry,
 		adminRepo:         adminRepo,
+		mailer:            mail,
 	}
 }
 
@@ -347,6 +350,128 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	})
 }
 
+// changeMyPasswordRequest represents a change-password request (authenticated).
+type changeMyPasswordRequest struct {
+	OldPassword        string `json:"old_password" binding:"required"`
+	NewPassword        string `json:"new_password" binding:"required,min=8"`
+	LogoutOtherDevices *bool  `json:"logout_other_devices"` // defaults to true
+}
+
+// ChangePassword godoc
+// @Summary Change password (authenticated user)
+// @Description Verify the old password, set a new one, and optionally invalidate all other sessions.
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param request body changeMyPasswordRequest true "Change password payload"
+// @Success 200 {object} AuthResponse
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Router /auth/change-password [post]
+func (h *AuthHandler) ChangePassword(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	var req changeMyPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Fetch user from DB so we have the current password hash + token version
+	var user domain.User
+	if err := h.db.First(&user, userID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	if !user.IsActive {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Account is deactivated"})
+		return
+	}
+
+	// Verify old password
+	if err := auth.VerifyPassword(user.PasswordHash, req.OldPassword); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Old password is incorrect"})
+		return
+	}
+
+	// Hash new password
+	hashedPassword, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
+		return
+	}
+
+	logoutOthers := true
+	if req.LogoutOtherDevices != nil {
+		logoutOthers = *req.LogoutOtherDevices
+	}
+
+	tx := h.db.WithContext(c.Request.Context()).Begin()
+
+	// Update password
+	if err := tx.Model(&user).UpdateColumn("password_hash", hashedPassword).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update password"})
+		return
+	}
+
+	tokenVersion := user.TokenVersion
+	if logoutOthers {
+		// Increment token version — invalidates all existing JWTs except the
+		// one we're about to issue below
+		if err := tx.Model(&domain.User{}).Where("id = ?", user.ID).
+			UpdateColumn("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to invalidate old sessions"})
+			return
+		}
+		tokenVersion++
+
+		// Wipe all device records for this user so push notifications stop
+		// going to other devices
+		tx.Where("user_id = ?", user.ID).Delete(&domain.UserDevice{})
+	}
+
+	tx.Commit()
+
+	// Re-fetch so the response includes the latest user state
+	h.db.First(&user, userID)
+	user.ComputeSubscriptionStatus()
+
+	// Issue new access token with the (possibly bumped) token version
+	accessToken, err := h.jwtManager.GenerateAccessToken(
+		user.ID,
+		user.Email,
+		string(user.Role),
+		user.UniversityID,
+		user.DepartmentID,
+		tokenVersion,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})
+		return
+	}
+
+	refreshToken, err := h.jwtManager.GenerateRefreshToken(user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate refresh token"})
+		return
+	}
+
+	c.JSON(http.StatusOK, AuthResponse{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		User:         user,
+		ExpiresIn:    int64(h.accessTokenExpiry * 60),
+	})
+}
+
 // GetMe godoc
 // @Summary Get current user
 // @Description Get the authenticated user's profile
@@ -365,14 +490,21 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 	}
 
 	var user domain.User
-	if err := h.db.Preload("Student.Batch").Preload("Student.Department").Preload("Student.University").First(&user, userID).Error; err != nil {
+	if err := h.db.Preload("Student.Batch").Preload("Student.Department").Preload("Student.University").Preload("Student.Hall").First(&user, userID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
 	}
 
-	// Populate batch from Student's Batch relation
-	if user.Student != nil && user.Student.Batch != nil {
-		user.Batch = user.Student.Batch.Name
+	// Populate batch/hall/blood group from the Student relation — these
+	// aren't columns on User itself (see domain.User's Hall/Blood comment).
+	if user.Student != nil {
+		if user.Student.Batch != nil {
+			user.Batch = user.Student.Batch.Name
+		}
+		if user.Student.Hall != nil {
+			user.Hall = user.Student.Hall.Name
+		}
+		user.Blood = user.Student.BloodGroup
 	}
 	user.ComputeSubscriptionStatus()
 

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"time"
 
 	"campusassistant-api/internal/domain"
 
@@ -141,8 +142,15 @@ func (r *merchantRepository) UpdateMerchant(ctx context.Context, merchant *domai
 }
 
 func (r *merchantRepository) SetMerchantStatus(ctx context.Context, id uuid.UUID, status domain.MerchantStatus, rejectionReason string) error {
-	return r.db.WithContext(ctx).Model(&domain.Merchant{}).Where("id = ?", id).
-		Updates(map[string]interface{}{"status": status, "rejection_reason": rejectionReason}).Error
+	if err := r.db.WithContext(ctx).Model(&domain.Merchant{}).Where("id = ?", id).
+		Updates(map[string]interface{}{"status": status, "rejection_reason": rejectionReason}).Error; err != nil {
+		return err
+	}
+	if status == domain.MerchantStatusApproved {
+		// First approval only; approved_at is read-only through GORM, hence raw SQL.
+		return r.db.WithContext(ctx).Exec("UPDATE merchants SET approved_at = ? WHERE id = ? AND approved_at IS NULL", time.Now(), id).Error
+	}
+	return nil
 }
 
 func (r *merchantRepository) DeleteMerchant(ctx context.Context, id uuid.UUID) error {

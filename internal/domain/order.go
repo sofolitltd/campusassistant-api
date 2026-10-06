@@ -40,6 +40,19 @@ type Order struct {
 	Status                OrderStatus   `gorm:"type:varchar(20);default:'pending_payment';index" json:"status"`
 	PaymentMethod         PaymentMethod `gorm:"type:varchar(20);default:'bkash'" json:"payment_method"`
 	Items                 []OrderItem   `gorm:"foreignKey:OrderID;constraint:OnDelete:CASCADE" json:"items,omitempty"`
+	// Events is the status timeline (oldest first). Only loaded by GetByID.
+	Events []OrderEvent `gorm:"foreignKey:OrderID" json:"events,omitempty"`
+}
+
+// OrderEvent is one entry in an order's status timeline: written once per
+// status the order enters (including its initial one), never edited.
+type OrderEvent struct {
+	Base
+	OrderID uuid.UUID   `gorm:"type:uuid;not null;index" json:"order_id"`
+	Status  OrderStatus `gorm:"type:varchar(20);not null" json:"status"`
+	// ActorID is who caused the change: the buyer, a merchant's owner, an
+	// admin, or uuid.Nil for the system (payment webhook/reconciler).
+	ActorID uuid.UUID `gorm:"type:uuid" json:"actor_id"`
 }
 
 // OrderItem is a single line-item within an Order. ProductTitle/UnitPrice
