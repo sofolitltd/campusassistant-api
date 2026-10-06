@@ -45,6 +45,11 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	r.Use(middleware.AccessLogger())
 	r.Use(gin.Recovery())
 	corsOrigins := config.SplitList(cfg.CORSAllowedOrigins)
+	// Built-in origins for the hosted Flutter web app (Firebase Hosting serves both domains).
+	corsOrigins = append(corsOrigins,
+		"https://campusassistantbd.web.app",
+		"https://campusassistantbd.firebaseapp.com",
+	)
 	if o := middleware.NormalizeOrigin(cfg.BkashCallbackBaseURL); o != "" {
 		corsOrigins = append(corsOrigins, o) // the Flutter web app that bKash redirects back to
 	}
@@ -538,6 +543,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	productRepo := postgres.NewProductRepository(db)
 	merchantHandler := handler.NewMerchantHandler(db, merchantRepo, productRepo, notificationService)
 	v1.GET("/merchants/platform", guard.Require(middleware.Public), merchantHandler.GetPlatformMerchant)
+	v1.GET("/merchants/public", guard.Require(middleware.AuthJWT), merchantHandler.ListPublicMerchants)
 	merchantGroup := v1.Group("/merchants")
 	{
 		merchantGroup.GET("", guard.Require(middleware.AuthJWT), merchantHandler.GetAllMerchants)
