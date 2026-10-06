@@ -344,7 +344,9 @@ func (r *chatRepository) GetContacts(ctx context.Context, departmentID uuid.UUID
 	}
 
 	query := baseQuery.
-		Select("users.id, users.first_name, users.last_name, users.avatar_url").
+		Joins("LEFT JOIN batches ON batches.id = students.batch_id").
+		Joins("LEFT JOIN sessions ON sessions.id = students.session_id").
+		Select("users.id, users.first_name, users.last_name, users.avatar_url, batches.name AS batch_name, sessions.name AS session_name").
 		Order("users.first_name ASC").
 		Limit(limit).Offset(offset)
 
@@ -352,18 +354,32 @@ func (r *chatRepository) GetContacts(ctx context.Context, departmentID uuid.UUID
 		query = query.Where("(users.first_name || ' ' || users.last_name) ILIKE ?", "%"+search+"%")
 	}
 
-	var users []domain.User
-	if err := query.Find(&users).Error; err != nil {
+	var rows []struct {
+		ID          uuid.UUID
+		FirstName   string
+		LastName    string
+		AvatarURL   string
+		BatchName   *string
+		SessionName *string
+	}
+	if err := query.Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 
-	contacts := make([]domain.Contact, len(users))
-	for i, u := range users {
-		contacts[i] = domain.Contact{
-			UserID:    u.ID.String(),
-			Name:      u.FullName(),
-			AvatarURL: u.AvatarURL,
+	contacts := make([]domain.Contact, len(rows))
+	for i, row := range rows {
+		c := domain.Contact{
+			UserID:    row.ID.String(),
+			Name:      row.FirstName + " " + row.LastName,
+			AvatarURL: row.AvatarURL,
 		}
+		if row.BatchName != nil {
+			c.BatchName = *row.BatchName
+		}
+		if row.SessionName != nil {
+			c.SessionName = *row.SessionName
+		}
+		contacts[i] = c
 	}
 
 	return contacts, total, nil

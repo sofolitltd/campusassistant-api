@@ -63,6 +63,10 @@ type Contact struct {
 	UserID    string `json:"userId"`
 	Name      string `json:"name"`
 	AvatarURL string `json:"avatarUrl"`
+	// BatchName / SessionName come from the contact's student record and are
+	// empty when it has none.
+	BatchName   string `json:"batchName,omitempty"`
+	SessionName string `json:"sessionName,omitempty"`
 }
 
 // UserDeletedMessage tracks messages a user has chosen to hide ("delete for me").
