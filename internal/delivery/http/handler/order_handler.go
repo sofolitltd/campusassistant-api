@@ -1,12 +1,17 @@
 package handler
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	stdlog "log"
 	"net/http"
+	"time"
 
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
 	"campusassistant-api/pkg/logger"
+	"campusassistant-api/pkg/telegram"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -44,6 +49,7 @@ type OrderHandler struct {
 	paymentSvc   *service.MarketplacePaymentService
 	orderSvc     *service.OrderService
 	commission   *service.CommissionService // optional; nil uses each merchant's own rate
+	telegram     *telegram.Client
 }
 
 // SetCommission enables the new-seller promotional commission at checkout.
@@ -56,6 +62,7 @@ func NewOrderHandler(
 	addressRepo domain.AddressRepository,
 	paymentSvc *service.MarketplacePaymentService,
 	orderSvc *service.OrderService,
+	telegramClient *telegram.Client,
 ) *OrderHandler {
 	return &OrderHandler{
 		orderRepo:    orderRepo,
@@ -64,7 +71,24 @@ func NewOrderHandler(
 		addressRepo:  addressRepo,
 		paymentSvc:   paymentSvc,
 		orderSvc:     orderSvc,
+		telegram:     telegramClient,
 	}
+}
+
+// notifyTelegram fires a best-effort admin alert in the background — never
+// something that should delay the HTTP response or fail the request it
+// follows.
+func (h *OrderHandler) notifyTelegram(text string) {
+	if h.telegram == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := h.telegram.SendMessage(ctx, text); err != nil {
+			stdlog.Printf("[order] telegram notify failed: %v", err)
+		}
+	}()
 }
 
 // writeTransitionError maps OrderService errors onto HTTP statuses.
@@ -433,11 +457,14 @@ func (h *OrderHandler) ExecuteMarketplacePayment(c *gin.Context) {
 		return
 	}
 	if err := h.paymentSvc.ExecutePayment(c.Request.Context(), userID, req.PaymentID); err != nil {
-		switch err {
-		case service.ErrOrderTxNotFound:
+		switch {
+		case errors.Is(err, service.ErrOrderTxNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "Payment transaction not found"})
-		case service.ErrForbidden:
+		case errors.Is(err, service.ErrForbidden):
 			c.JSON(http.StatusForbidden, gin.H{"error": "You do not own this payment"})
+		case errors.Is(err, service.ErrMarketplacePaymentNotCompleted):
+			h.notifyTelegram(fmt.Sprintf("Marketplace bKash payment failed/not completed\nUser ID: %s\nPayment ID: %s\nReason: %s", userID, req.PaymentID, err.Error()))
+			c.JSON(http.StatusPaymentRequired, gin.H{"error": err.Error()})
 		default:
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		}

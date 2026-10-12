@@ -84,6 +84,12 @@ type Config struct {
 	// BkashCallbackBaseURL is where bKash redirects the user's browser/WebView
 	// after payment — the Flutter web app's origin (its /payment route).
 	BkashCallbackBaseURL string `mapstructure:"BKASH_CALLBACK_BASE_URL"`
+
+	// Telegram (admin alerts, e.g. a new student-verification submission).
+	// Optional: if either is blank, the message is logged instead of sent,
+	// exactly like SMTP and FCM degrade without credentials.
+	TelegramBotToken string `mapstructure:"TELEGRAM_BOT_TOKEN"`
+	TelegramChatID   string `mapstructure:"TELEGRAM_CHAT_ID"`
 }
 
 func LoadConfig() (*Config, error) {
@@ -130,6 +136,8 @@ func LoadConfig() (*Config, error) {
 	v.BindEnv("BKASH_PROD_APP_KEY")
 	v.BindEnv("BKASH_PROD_APP_SECRET")
 	v.BindEnv("BKASH_CALLBACK_BASE_URL")
+	v.BindEnv("TELEGRAM_BOT_TOKEN")
+	v.BindEnv("TELEGRAM_CHAT_ID")
 
 	// Default values
 	v.SetDefault("PORT", "8080")

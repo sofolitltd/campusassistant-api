@@ -42,7 +42,19 @@ type UserStats struct {
 	Staff      int64 `json:"staff"`
 }
 
+// UserGrowth is the signup series behind the dashboard's User Growth chart.
+// Granularity is "hour" (today), "day" (7d/30d), "month" (12m, lifetime) or
+// "year" (lifetime spanning more than three years); Points are oldest first,
+// zero-filled, and bucketed in Bangladesh time.
+type UserGrowth struct {
+	Range       string       `json:"range"`
+	Granularity string       `json:"granularity"`
+	Total       int64        `json:"total"`
+	Points      []DailyCount `json:"points"`
+}
+
 type StatsRepository interface {
 	GetDashboardStats(ctx context.Context) (*DashboardStats, error)
+	GetUserGrowth(ctx context.Context, rng string) (*UserGrowth, error)
 	GetUserStats(ctx context.Context) (*UserStats, error)
 }

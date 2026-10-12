@@ -1,27 +1,49 @@
 package handler
 
 import (
+	"context"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
+	"campusassistant-api/pkg/telegram"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
 type ProductHandler struct {
-	repo         domain.ProductRepository
-	merchantRepo domain.MerchantRepository
-	wishlist     *service.WishlistService // optional; nil skips saved-product alerts
+	repo           domain.ProductRepository
+	merchantRepo   domain.MerchantRepository
+	wishlist       *service.WishlistService // optional; nil skips saved-product alerts
+	telegramClient *telegram.Client
 }
 
 // SetWishlist enables back-in-stock and price-drop alerts to users who saved a product.
 func (h *ProductHandler) SetWishlist(w *service.WishlistService) { h.wishlist = w }
 
-func NewProductHandler(repo domain.ProductRepository, merchantRepo domain.MerchantRepository) *ProductHandler {
-	return &ProductHandler{repo: repo, merchantRepo: merchantRepo}
+func NewProductHandler(repo domain.ProductRepository, merchantRepo domain.MerchantRepository, telegramClient *telegram.Client) *ProductHandler {
+	return &ProductHandler{repo: repo, merchantRepo: merchantRepo, telegramClient: telegramClient}
+}
+
+// notifyTelegram fires a best-effort admin alert in the background — never
+// something that should delay the HTTP response or fail the request it
+// follows.
+func (h *ProductHandler) notifyTelegram(text string) {
+	if h.telegramClient == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := h.telegramClient.SendMessage(ctx, text); err != nil {
+			log.Printf("[product] telegram notify failed: %v", err)
+		}
+	}()
 }
 
 // GetAllProducts is the admin listing — every product, any publish status,
@@ -200,6 +222,7 @@ func (h *ProductHandler) CreateMyProduct(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create product"})
 		return
 	}
+	h.notifyTelegram(fmt.Sprintf("New product submitted\nTitle: %s\nMerchant: %s\nProduct ID: %s", product.Title, merchant.BusinessName, product.ID))
 	c.JSON(http.StatusOK, product)
 }
 

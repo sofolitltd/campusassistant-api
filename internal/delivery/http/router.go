@@ -14,6 +14,7 @@ import (
 	"campusassistant-api/pkg/fcm"
 	"campusassistant-api/pkg/mailer"
 	"campusassistant-api/pkg/storage"
+	"campusassistant-api/pkg/telegram"
 	"context"
 	"log"
 	netHTTP "net/http"
@@ -41,9 +42,13 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		log.Printf("[security] TRUSTED_PROXIES is not set: X-Forwarded-For is trusted from any source, so per-IP rate limits can be evaded by spoofing it")
 	}
 
+	// Telegram admin alerts — degrades to logging when TELEGRAM_BOT_TOKEN/
+	// TELEGRAM_CHAT_ID are unset, so this is safe to construct unconditionally.
+	telegramClient := telegram.New(cfg)
+
 	// Middlewares
 	r.Use(middleware.AccessLogger())
-	r.Use(middleware.SystemLogger(db))
+	r.Use(middleware.SystemLogger(db, telegramClient))
 	r.Use(gin.Recovery())
 	corsOrigins := config.SplitList(cfg.CORSAllowedOrigins)
 	// Built-in origins for the hosted Flutter web app (Firebase Hosting serves both domains).
@@ -277,7 +282,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	crGroup := v1.Group("/crs")
 	{
 		crGroup.POST("", guard.Require(middleware.AdminJWT), crHandler.Create)
-		crGroup.GET("", guard.Require(middleware.AuthJWT), crHandler.GetAll)
+		crGroup.GET("", guard.Require(middleware.Public), crHandler.GetAll)
 		crGroup.GET("/:id", guard.Require(middleware.AuthJWT), crHandler.GetByID)
 		crGroup.PUT("/:id", guard.Require(middleware.AdminJWT), crHandler.Update)
 		crGroup.DELETE("/:id", guard.Require(middleware.AdminJWT), crHandler.Delete)
@@ -416,6 +421,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	statsRepo := postgres.NewStatsRepository(db)
 	statsHandler := handler.NewStatsHandler(statsRepo)
 	v1.GET("/stats", guard.Require(middleware.AdminJWT), statsHandler.GetDashboardStats)
+	v1.GET("/stats/user-growth", guard.Require(middleware.AdminJWT), statsHandler.GetUserGrowth)
 	v1.GET("/users/stats", guard.Require(middleware.AdminJWT), statsHandler.GetUserStats)
 
 	// Rewards: coin-based system for resource access. Users earn coins by
@@ -602,7 +608,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// state transitions/checks, not plain field updates.
 	merchantRepo := postgres.NewMerchantRepository(db)
 	productRepo := postgres.NewProductRepository(db)
-	merchantHandler := handler.NewMerchantHandler(db, merchantRepo, productRepo, notificationService)
+	merchantHandler := handler.NewMerchantHandler(db, merchantRepo, productRepo, notificationService, telegramClient)
 	v1.GET("/merchants/platform", guard.Require(middleware.Public), merchantHandler.GetPlatformMerchant)
 	v1.GET("/merchants/public", guard.Require(middleware.AuthJWT), merchantHandler.ListPublicMerchants)
 	merchantGroup := v1.Group("/merchants")
@@ -615,7 +621,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		merchantGroup.DELETE("/:id", guard.Require(middleware.AdminJWT), merchantHandler.DeleteMerchant)
 	}
 
-	productHandler := handler.NewProductHandler(productRepo, merchantRepo)
+	productHandler := handler.NewProductHandler(productRepo, merchantRepo, telegramClient)
 	wishlistSvc := service.NewWishlistService(db, notificationService)
 	productHandler.SetWishlist(wishlistSvc)
 	wishlistHandler := handler.NewWishlistHandler(wishlistSvc, productRepo)
@@ -700,7 +706,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	commissionSvc := service.NewCommissionService(db)
 	marketAdmin := handler.NewMarketplaceAdminHandler(db, commissionSvc, insightsSvc, merchantRepo)
 	reviewHandler := handler.NewReviewHandler(service.NewReviewService(db, notificationService), merchantRepo)
-	orderHandler := handler.NewOrderHandler(orderRepo, productRepo, merchantRepo, addressRepo, marketplacePaymentSvc, orderSvc)
+	orderHandler := handler.NewOrderHandler(orderRepo, productRepo, merchantRepo, addressRepo, marketplacePaymentSvc, orderSvc, telegramClient)
 	orderHandler.SetCommission(commissionSvc)
 
 	orderAdminGroup := v1.Group("/orders")
@@ -772,7 +778,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	bkashTxRepo := postgres.NewBkashTransactionRepository(db)
 	couponRepo := postgres.NewCouponRepository(db)
 	paymentService := service.NewPaymentService(db, subRepo, bkashTxRepo, couponRepo, bkashClient, cfg.BkashCallbackBaseURL, billingSvc)
-	bkashHandler := handler.NewBkashHandler(paymentService)
+	bkashHandler := handler.NewBkashHandler(paymentService, telegramClient)
 	paymentGroup := v1.Group("/payments/bkash")
 	paymentGroup.Use(middleware.JWTMiddleware(jwtManager, db), payLimit)
 	{
@@ -880,7 +886,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// Student Verification — document-based self-onboarding, the
 	// alternative to a CR-issued verification code. Users submit under /my;
 	// admins review under /student-verifications.
-	studentVerificationHandler := handler.NewStudentVerificationHandler(db, postgres.NewStudentVerificationRepository(db), notificationService)
+	studentVerificationHandler := handler.NewStudentVerificationHandler(db, postgres.NewStudentVerificationRepository(db), notificationService, telegramClient)
 	myStudentVerificationGroup := v1.Group("/my/student-verification")
 	myStudentVerificationGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
@@ -1113,6 +1119,10 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// instead of a client-scheduled local alarm, so it survives reinstalls/
 	// reboots and works across a student's devices.
 	service.NewCareerReminderScheduler(db, careerRepo, notificationService).Start(context.Background())
+
+	// Sweep up accounts stuck mid-signup in the document-based student
+	// onboarding flow (see OrphanUserCleanupScheduler for why these occur).
+	service.NewOrphanUserCleanupScheduler(db).Start(context.Background())
 
 	// Global search: one round trip across resources, notices, courses,
 	// clubs, associations, teachers, staff, marketplace products, lost &

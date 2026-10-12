@@ -1,22 +1,44 @@
 package handler
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"campusassistant-api/internal/service"
+	"campusassistant-api/pkg/telegram"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
 type BkashHandler struct {
-	payments *service.PaymentService
+	payments       *service.PaymentService
+	telegramClient *telegram.Client
 }
 
-func NewBkashHandler(payments *service.PaymentService) *BkashHandler {
-	return &BkashHandler{payments: payments}
+func NewBkashHandler(payments *service.PaymentService, telegramClient *telegram.Client) *BkashHandler {
+	return &BkashHandler{payments: payments, telegramClient: telegramClient}
+}
+
+// notifyTelegram fires a best-effort admin alert in the background — never
+// something that should delay the HTTP response or fail the request it
+// follows.
+func (h *BkashHandler) notifyTelegram(text string) {
+	if h.telegramClient == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := h.telegramClient.SendMessage(ctx, text); err != nil {
+			log.Printf("[bkash] telegram notify failed: %v", err)
+		}
+	}()
 }
 
 type createBkashPaymentRequest struct {
@@ -158,6 +180,7 @@ func (h *BkashHandler) ExecutePayment(c *gin.Context) {
 		case errors.Is(err, service.ErrForbidden):
 			c.JSON(http.StatusForbidden, gin.H{"error": "This payment does not belong to you"})
 		case errors.Is(err, service.ErrPaymentNotCompleted):
+			h.notifyTelegram(fmt.Sprintf("bKash payment failed/not completed\nUser ID: %s\nPayment ID: %s\nReason: %s", userID, req.PaymentID, err.Error()))
 			c.JSON(http.StatusPaymentRequired, gin.H{"error": err.Error()})
 		case errors.Is(err, service.ErrPlanNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription plan not found"})

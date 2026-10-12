@@ -25,6 +25,17 @@ func (h *StatsHandler) GetDashboardStats(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
+// GetUserGrowth serves the dashboard chart: ?range=today|7d|30d|12m|lifetime.
+func (h *StatsHandler) GetUserGrowth(c *gin.Context) {
+	growth, err := h.repo.GetUserGrowth(c.Request.Context(), c.DefaultQuery("range", "7d"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch user growth", "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, growth)
+}
+
 func (h *StatsHandler) GetUserStats(c *gin.Context) {
 	stats, err := h.repo.GetUserStats(c.Request.Context())
 	if err != nil {

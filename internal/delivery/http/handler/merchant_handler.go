@@ -1,10 +1,15 @@
 package handler
 
 import (
+	"context"
+	"fmt"
+	"log"
 	"net/http"
+	"time"
 
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
+	"campusassistant-api/pkg/telegram"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -16,10 +21,27 @@ type MerchantHandler struct {
 	repo            domain.MerchantRepository
 	productRepo     domain.ProductRepository
 	notificationSvc *service.NotificationService
+	telegramClient  *telegram.Client
 }
 
-func NewMerchantHandler(db *gorm.DB, repo domain.MerchantRepository, productRepo domain.ProductRepository, notificationSvc *service.NotificationService) *MerchantHandler {
-	return &MerchantHandler{db: db, repo: repo, productRepo: productRepo, notificationSvc: notificationSvc}
+func NewMerchantHandler(db *gorm.DB, repo domain.MerchantRepository, productRepo domain.ProductRepository, notificationSvc *service.NotificationService, telegramClient *telegram.Client) *MerchantHandler {
+	return &MerchantHandler{db: db, repo: repo, productRepo: productRepo, notificationSvc: notificationSvc, telegramClient: telegramClient}
+}
+
+// notifyTelegram fires a best-effort admin alert in the background — never
+// something that should delay the HTTP response or fail the request it
+// follows.
+func (h *MerchantHandler) notifyTelegram(text string) {
+	if h.telegramClient == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := h.telegramClient.SendMessage(ctx, text); err != nil {
+			log.Printf("[merchant] telegram notify failed: %v", err)
+		}
+	}()
 }
 
 // GetAllMerchants is the admin listing, optionally filtered by ?status=.
@@ -292,6 +314,7 @@ func (h *MerchantHandler) ApplyForMerchant(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create merchant application"})
 		return
 	}
+	h.notifyTelegram(fmt.Sprintf("New merchant application\nBusiness: %s\nMerchant ID: %s", merchant.BusinessName, merchant.ID))
 	c.JSON(http.StatusOK, merchant)
 }
 

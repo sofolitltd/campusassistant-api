@@ -2,6 +2,10 @@ package middleware
 
 import (
 	"campusassistant-api/internal/domain"
+	"campusassistant-api/pkg/telegram"
+	"context"
+	"fmt"
+	"log"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,7 +19,11 @@ import (
 // same reasoning as AccessLogger (WebSocket ?token=<JWT> must never land in
 // a log a browser can read back). The write happens in a goroutine so a
 // logging hiccup never adds latency to the response the client is waiting on.
-func SystemLogger(db *gorm.DB) gin.HandlerFunc {
+//
+// telegramClient may be nil (alerts disabled). Only genuine server errors
+// (status >= 500) page admins on Telegram — 4xx is routine client misuse and
+// would be noise at request volume.
+func SystemLogger(db *gorm.DB, telegramClient *telegram.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
@@ -52,5 +60,16 @@ func SystemLogger(db *gorm.DB) gin.HandlerFunc {
 		go func() {
 			db.Create(&entry)
 		}()
+
+		if status >= 500 && telegramClient != nil {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				text := fmt.Sprintf("Server error %d\n%s %s\n%s", status, method, path, message)
+				if err := telegramClient.SendMessage(ctx, text); err != nil {
+					log.Printf("[system_logger] telegram notify failed: %v", err)
+				}
+			}()
+		}
 	}
 }

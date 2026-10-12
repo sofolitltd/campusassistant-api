@@ -113,6 +113,15 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 				// These live on the linked Student row, not on users — filter
 				// through it so the admin Users page can narrow by batch/session.
 				db = db.Where("users.id IN (SELECT user_id FROM students WHERE "+key+" = ? AND deleted_at IS NULL)", value)
+			} else if isUser && key == "is_pro" {
+				// Mirror User.ComputeSubscriptionStatus rather than trusting the
+				// raw flag, which stays true until the hourly expiry sweep runs.
+				activePro := "(users.is_pro = true AND (users.pro_expiry IS NULL OR users.pro_expiry > NOW()))"
+				if b, ok := value.(bool); ok && b {
+					db = db.Where(activePro)
+				} else {
+					db = db.Where("NOT " + activePro)
+				}
 			} else if (isBanner || isContact) && (key == "university_id" || key == "department_id") {
 				// Join with targets for specialized filtering
 				targetTable := "banner_targets"

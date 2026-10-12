@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +13,7 @@ import (
 
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
+	"campusassistant-api/pkg/telegram"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -25,10 +29,11 @@ type StudentVerificationHandler struct {
 	db              *gorm.DB
 	repo            domain.StudentVerificationRepository
 	notificationSvc *service.NotificationService
+	telegramClient  *telegram.Client
 }
 
-func NewStudentVerificationHandler(db *gorm.DB, repo domain.StudentVerificationRepository, notificationSvc *service.NotificationService) *StudentVerificationHandler {
-	return &StudentVerificationHandler{db: db, repo: repo, notificationSvc: notificationSvc}
+func NewStudentVerificationHandler(db *gorm.DB, repo domain.StudentVerificationRepository, notificationSvc *service.NotificationService, telegramClient *telegram.Client) *StudentVerificationHandler {
+	return &StudentVerificationHandler{db: db, repo: repo, notificationSvc: notificationSvc, telegramClient: telegramClient}
 }
 
 // studentVerificationRoute is where the app shows the request's status.
@@ -122,7 +127,29 @@ func (h *StudentVerificationHandler) Submit(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to submit request"})
 		return
 	}
+	h.notifyTelegram(v)
 	c.JSON(http.StatusCreated, v)
+}
+
+// notifyTelegram pings the admin Telegram chat about a new submission. Fired
+// in a goroutine with its own background context — this is a best-effort
+// alert, never something that should delay the HTTP response or fail the
+// submission if Telegram is slow or unreachable.
+func (h *StudentVerificationHandler) notifyTelegram(v *domain.StudentVerificationRequest) {
+	if h.telegramClient == nil {
+		return
+	}
+	text := fmt.Sprintf(
+		"New student verification request\nName: %s\nRoll: %s\nRequest ID: %s",
+		v.Name, v.StudentID, v.ID,
+	)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := h.telegramClient.SendMessage(ctx, text); err != nil {
+			log.Printf("[student_verification] telegram notify failed: %v", err)
+		}
+	}()
 }
 
 // validatePlacement checks the chosen university/department/batch/session
