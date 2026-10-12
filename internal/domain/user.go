@@ -64,9 +64,14 @@ type User struct {
 	// This is the exact field name the Flutter client's Pro-gating reads.
 	SubscriptionStatus string `gorm:"-" json:"subscription_status"`
 
+	// IsCR is true while the user holds a current CR row (see ActiveCR). Not a
+	// DB column; the Flutter client reads it to show CR-only actions.
+	IsCR bool `gorm:"-" json:"is_cr"`
+
 	// Academic/Professional Profiles (Preloadable)
 	Student *Student `gorm:"foreignKey:UserID" json:"student,omitempty"`
 	Teacher *Teacher `gorm:"foreignKey:UserID" json:"teacher,omitempty"`
+	Staff   *Staff   `gorm:"foreignKey:UserID" json:"staff,omitempty"`
 }
 
 // FullName returns the user's full name

@@ -214,6 +214,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	user.ComputeSubscriptionStatus()
+	h.markCR(&user)
 
 	c.JSON(http.StatusOK, AuthResponse{
 		AccessToken:  accessToken,
@@ -443,6 +444,7 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	// Re-fetch so the response includes the latest user state
 	h.db.First(&user, userID)
 	user.ComputeSubscriptionStatus()
+	h.markCR(&user)
 
 	// Issue new access token with the (possibly bumped) token version
 	accessToken, err := h.jwtManager.GenerateAccessToken(
@@ -490,7 +492,11 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 	}
 
 	var user domain.User
-	if err := h.db.Preload("Student.Batch").Preload("Student.Department").Preload("Student.University").Preload("Student.Hall").First(&user, userID).Error; err != nil {
+	if err := h.db.
+		Preload("Student.Batch").Preload("Student.Department").Preload("Student.University").Preload("Student.Hall").
+		Preload("Teacher.Department").Preload("Teacher.University").
+		Preload("Staff.Department").Preload("Staff.University").
+		First(&user, userID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
 	}
@@ -507,14 +513,36 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 		user.Blood = user.Student.BloodGroup
 	}
 	user.ComputeSubscriptionStatus()
+	h.markCR(&user)
 
-	// Fallback to Student-level university/department if User-level not set
+	// Fallback to Student/Teacher/Staff-level university/department if
+	// User-level not set.
 	if user.UniversityID == nil && user.Student != nil {
 		user.UniversityID = &user.Student.UniversityID
 	}
 	if user.DepartmentID == nil && user.Student != nil {
 		user.DepartmentID = &user.Student.DepartmentID
 	}
+	if user.UniversityID == nil && user.Teacher != nil {
+		user.UniversityID = &user.Teacher.UniversityID
+	}
+	if user.DepartmentID == nil && user.Teacher != nil {
+		user.DepartmentID = &user.Teacher.DepartmentID
+	}
+	if user.UniversityID == nil && user.Staff != nil {
+		user.UniversityID = &user.Staff.UniversityID
+	}
+	if user.DepartmentID == nil && user.Staff != nil {
+		user.DepartmentID = &user.Staff.DepartmentID
+	}
 
 	c.JSON(http.StatusOK, user)
+}
+
+// markCR sets user.IsCR from the cr table so the client's CR-only actions match
+// what the API will actually authorize.
+func (h *AuthHandler) markCR(user *domain.User) {
+	var n int64
+	h.db.Model(&domain.CR{}).Scopes(domain.ActiveCR, domain.CRsOf(user.ID)).Count(&n)
+	user.IsCR = n > 0
 }

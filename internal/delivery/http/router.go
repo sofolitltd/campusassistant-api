@@ -226,16 +226,41 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	teacherRepo := postgres.NewGormRepositoryWithOrder[domain.Teacher](db, "weight ASC, name ASC")
 	teacherUsecase := usecase.NewGenericUsecase(teacherRepo)
-	teacherHandler := handler.NewGenericHandler(teacherUsecase)
+	teacherHandler := handler.NewTeacherHandler(teacherUsecase)
 	teacherGroup := v1.Group("/teachers")
 	{
 		teacherGroup.POST("", guard.Require(middleware.AdminJWT), teacherHandler.Create)
+		teacherGroup.POST("/verify-code", guard.Require(middleware.Public), teacherHandler.VerifyCode)
+		teacherGroup.POST("/claim-profile", guard.Require(middleware.Public), teacherHandler.ClaimProfile)
 		teacherGroup.GET("", guard.Require(middleware.AuthJWT), teacherHandler.GetAll)
 		teacherGroup.GET("/:id", guard.Require(middleware.AuthJWT), teacherHandler.GetByID)
 		teacherGroup.PUT("/:id", guard.Require(middleware.AdminJWT), teacherHandler.Update)
 		teacherGroup.DELETE("/:id", guard.Require(middleware.AdminJWT), teacherHandler.Delete)
 	}
-	registerRoutes[domain.Staff](v1, db, "staffs", guard, middleware.Access{Read: middleware.AuthJWT, Write: middleware.AdminJWT})
+	myTeacherGroup := v1.Group("/my/teacher")
+	myTeacherGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myTeacherGroup.GET("", teacherHandler.GetMyTeacher)
+	}
+
+	staffRepo := postgres.NewGormRepositoryWithOrder[domain.Staff](db, "serial ASC, name ASC")
+	staffUsecase := usecase.NewGenericUsecase(staffRepo)
+	staffHandler := handler.NewStaffHandler(staffUsecase)
+	staffGroup := v1.Group("/staffs")
+	{
+		staffGroup.POST("", guard.Require(middleware.AdminJWT), staffHandler.Create)
+		staffGroup.POST("/verify-code", guard.Require(middleware.Public), staffHandler.VerifyCode)
+		staffGroup.POST("/claim-profile", guard.Require(middleware.Public), staffHandler.ClaimProfile)
+		staffGroup.GET("", guard.Require(middleware.AuthJWT), staffHandler.GetAll)
+		staffGroup.GET("/:id", guard.Require(middleware.AuthJWT), staffHandler.GetByID)
+		staffGroup.PUT("/:id", guard.Require(middleware.AdminJWT), staffHandler.Update)
+		staffGroup.DELETE("/:id", guard.Require(middleware.AdminJWT), staffHandler.Delete)
+	}
+	myStaffGroup := v1.Group("/my/staff")
+	myStaffGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myStaffGroup.GET("", staffHandler.GetMyStaff)
+	}
 	crRepo := postgres.NewGormRepository[domain.CR](db)
 	crUsecase := usecase.NewGenericUsecase(crRepo)
 	crHandler := handler.NewCrHandler(crUsecase)
@@ -311,7 +336,32 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		bg.PUT("/:id", guard.Require(middleware.AuthJWT), bookmarkHandler.Update)
 		bg.DELETE("/:id", guard.Require(middleware.AuthJWT), bookmarkHandler.HardDelete)
 	}
+	// Class notices: any signed-in user reads; writes are authorised per
+	// request inside the handler (admin, or the current CR of that batch).
+	classNoticeHandler := handler.NewClassNoticeHandler(db)
+	cng := v1.Group("/class-notices")
+	{
+		cng.GET("", guard.Require(middleware.AuthJWT), classNoticeHandler.List)
+		cng.POST("", guard.Require(middleware.AuthJWT), classNoticeHandler.Create)
+		cng.PUT("/:id", guard.Require(middleware.AuthJWT), classNoticeHandler.Update)
+		cng.DELETE("/:id", guard.Require(middleware.AuthJWT), classNoticeHandler.Delete)
+	}
 	registerRoutes[domain.Routine](v1, db, "routines", guard, middleware.Access{Read: middleware.AuthJWT, Write: middleware.AdminJWT})
+
+	// Class schedule: weekly recurring slots + per-date status overrides.
+	// Reads are open to any signed-in user; writes are authorised per
+	// request inside the handler (admin, or the current CR of that batch).
+	classSlotHandler := handler.NewClassSlotHandler(db)
+	csg := v1.Group("/class-slots")
+	{
+		csg.GET("", guard.Require(middleware.AuthJWT), classSlotHandler.List)
+		csg.POST("", guard.Require(middleware.AuthJWT), classSlotHandler.Create)
+		csg.PUT("/:id", guard.Require(middleware.AuthJWT), classSlotHandler.Update)
+		csg.DELETE("/:id", guard.Require(middleware.AuthJWT), classSlotHandler.Delete)
+		csg.GET("/status", guard.Require(middleware.AuthJWT), classSlotHandler.ListStatus)
+		csg.POST("/status", guard.Require(middleware.AuthJWT), classSlotHandler.SetStatus)
+		csg.DELETE("/status/:id", guard.Require(middleware.AuthJWT), classSlotHandler.DeleteStatus)
+	}
 
 	courseRepo := postgres.NewCourseRepository(db)
 	courseUsecase := usecase.NewGenericUsecase[domain.Course](courseRepo)

@@ -2,6 +2,8 @@ package handler
 
 import (
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"path/filepath"
 	"time"
@@ -22,6 +24,51 @@ import (
 // one-off upload path.
 var sensitiveUploadFolders = map[string]bool{
 	"merchant-verification": true,
+}
+
+// uploadRule limits what a folder accepts. /upload is open to any signed-in
+// user, so folders that students can write to need rules enforced here rather
+// than in whichever client happens to call them.
+type uploadRule struct {
+	maxBytes int64
+	types    map[string]bool // sniffed MIME types
+}
+
+// restrictedUploadFolders lists folders with rules; unlisted folders keep the
+// existing unrestricted behavior so other features are unaffected.
+var restrictedUploadFolders = map[string]uploadRule{
+	"class-notices": {
+		maxBytes: 5 << 20,
+		types: map[string]bool{
+			"image/jpeg":      true,
+			"image/png":       true,
+			"image/gif":       true,
+			"image/webp":      true,
+			"application/pdf": true,
+		},
+	},
+}
+
+// checkUploadRule validates a file against its folder's rule. The type comes
+// from the file's first bytes, not the client-supplied Content-Type or name.
+func checkUploadRule(rule uploadRule, file *multipart.FileHeader) error {
+	if file.Size > rule.maxBytes {
+		return fmt.Errorf("file must be %d MB or smaller", rule.maxBytes>>20)
+	}
+	f, err := file.Open()
+	if err != nil {
+		return fmt.Errorf("could not read file")
+	}
+	defer f.Close()
+	head := make([]byte, 512)
+	n, err := io.ReadFull(f, head)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return fmt.Errorf("could not read file")
+	}
+	if !rule.types[http.DetectContentType(head[:n])] {
+		return fmt.Errorf("unsupported file type")
+	}
+	return nil
 }
 
 // presignedURLTTL is how long a resolved private-attachment URL stays valid.
@@ -50,6 +97,12 @@ func (h *UploadHandler) UploadImage(c *gin.Context) {
 	folder := c.PostForm("folder")
 	if folder == "" {
 		folder = "uploads"
+	}
+	if rule, ok := restrictedUploadFolders[folder]; ok {
+		if err := checkUploadRule(rule, file); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	// Optional: Add reference_id if provided

@@ -33,6 +33,27 @@ func (h *MerchantHandler) GetAllMerchants(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": merchants})
 }
 
+// ListPublicMerchants is the storefront merchants listing: the platform
+// merchant first, then approved merchants, with contact/verification/payout fields
+// redacted. GetAllMerchants is the unredacted admin listing — never expose
+// it to the app.
+func (h *MerchantHandler) ListPublicMerchants(c *gin.Context) {
+	merchants, err := h.repo.GetAllMerchants(c.Request.Context(), domain.MerchantStatus("approved"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch merchants"})
+		return
+	}
+	public := make([]*domain.Merchant, 0, len(merchants)+1)
+	// Campus Assistant's own in-house store always leads the list.
+	if platform, err := h.repo.GetOrCreatePlatformMerchant(c.Request.Context()); err == nil {
+		public = append(public, redactContactInfo(platform))
+	}
+	for i := range merchants {
+		public = append(public, redactContactInfo(&merchants[i]))
+	}
+	c.JSON(http.StatusOK, gin.H{"data": public})
+}
+
 // redactContactInfo strips Phone/Email/verification-document/payout fields
 // and the owning User before a merchant is serialized to a public
 // (non-admin, non-owner) response — those are for admin/self use only,
