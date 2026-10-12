@@ -23,7 +23,8 @@ import (
 // (payment proofs, dispute evidence, etc.) rather than adding another
 // one-off upload path.
 var sensitiveUploadFolders = map[string]bool{
-	"merchant-verification": true,
+	"merchant-verification":                true,
+	domain.StudentVerificationUploadFolder: true,
 }
 
 // uploadRule limits what a folder accepts. /upload is open to any signed-in
@@ -45,6 +46,14 @@ var restrictedUploadFolders = map[string]uploadRule{
 			"image/gif":       true,
 			"image/webp":      true,
 			"application/pdf": true,
+		},
+	},
+	domain.StudentVerificationUploadFolder: {
+		maxBytes: 5 << 20,
+		types: map[string]bool{
+			"image/jpeg": true,
+			"image/png":  true,
+			"image/webp": true,
 		},
 	},
 }
@@ -159,6 +168,12 @@ func (h *UploadHandler) MyUploadImage(c *gin.Context) {
 	folder := c.PostForm("folder")
 	if folder == "" {
 		folder = "uploads"
+	}
+	if rule, ok := restrictedUploadFolders[folder]; ok {
+		if err := checkUploadRule(rule, file); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	isPrivate := sensitiveUploadFolders[folder]
 

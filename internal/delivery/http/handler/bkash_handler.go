@@ -60,6 +60,47 @@ func (h *BkashHandler) CreatePayment(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+type validateCouponRequest struct {
+	Code   string    `json:"code" binding:"required"`
+	PlanID uuid.UUID `json:"plan_id" binding:"required"`
+}
+
+// ValidateCoupon previews a coupon's discount for the selected plan without
+// starting a checkout or reserving a use — lets the UI show the discounted
+// price as soon as the user applies a code.
+func (h *BkashHandler) ValidateCoupon(c *gin.Context) {
+	var req validateCouponRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	discounted, original, err := h.payments.ValidateCouponForPlan(c.Request.Context(), req.Code, req.PlanID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrPlanNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "Subscription plan not found"})
+		case errors.Is(err, service.ErrCouponNotFound):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid coupon code"})
+		case errors.Is(err, service.ErrCouponExpired):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Coupon code has expired"})
+		case errors.Is(err, service.ErrCouponExhausted):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Coupon code has reached its usage limit"})
+		case errors.Is(err, service.ErrCouponMinAmount), errors.Is(err, service.ErrCouponPlanMismatch):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "This coupon does not apply to the selected plan"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to validate coupon"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"discounted_amount": discounted,
+		"original_amount":   original,
+		"discount_amount":   original - discounted,
+	})
+}
+
 type cancelBkashPaymentRequest struct {
 	PaymentID string `json:"payment_id" binding:"required"`
 }

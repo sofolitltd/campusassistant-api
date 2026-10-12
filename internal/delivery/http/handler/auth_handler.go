@@ -42,7 +42,9 @@ type RegisterRequest struct {
 	LastName     string     `json:"last_name" binding:"required"`
 	Phone        string     `json:"phone"`
 	Gender       string     `json:"gender"`
-	Role         string     `json:"role"` // defaults to 'student' if empty
+	// Role is ignored: self-signup always creates a student. Teacher/staff
+	// roles are granted by claiming a profile, admin roles never via signup.
+	Role         string     `json:"role"`
 	UniversityID *uuid.UUID `json:"university_id"`
 	DepartmentID *uuid.UUID `json:"department_id"`
 }
@@ -98,12 +100,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// Set default role if not provided
-	role := req.Role
-	if role == "" {
-		role = string(domain.RoleStudent)
-	}
-
 	// Create user
 	user := domain.User{
 		Email:        strings.ToLower(req.Email),
@@ -112,7 +108,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		LastName:     req.LastName,
 		Phone:        req.Phone,
 		Gender:       req.Gender,
-		Role:         domain.Role(role),
+		Role:         domain.RoleStudent,
 		UniversityID: req.UniversityID,
 		DepartmentID: req.DepartmentID,
 		IsActive:     true,

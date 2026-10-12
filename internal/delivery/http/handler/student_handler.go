@@ -13,15 +13,18 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 type StudentHandler struct {
 	*GenericHandler[domain.Student]
+	db *gorm.DB
 }
 
-func NewStudentHandler(u usecase.Usecase[domain.Student]) *StudentHandler {
+func NewStudentHandler(u usecase.Usecase[domain.Student], db *gorm.DB) *StudentHandler {
 	return &StudentHandler{
 		GenericHandler: NewGenericHandler(u),
+		db:             db,
 	}
 }
 
@@ -78,76 +81,61 @@ func (h *StudentHandler) VerifyCode(c *gin.Context) {
 	c.JSON(http.StatusOK, students[0])
 }
 
+// ClaimProfile links the signed-in user to the unclaimed Student holding the
+// code. The user comes from the JWT. Only personal details (phone, blood
+// group, hall) can be filled in here — roll, batch, session, department and
+// university stay as the CR/admin entered them, so a code can't be used to
+// move a profile into another class.
 func (h *StudentHandler) ClaimProfile(c *gin.Context) {
 	var req struct {
-		Code         string     `json:"code" binding:"required"`
-		UserID       uuid.UUID  `json:"user_id" binding:"required"`
-		StudentID    string     `json:"student_id"`
-		Phone        string     `json:"phone"`
-		BloodGroup   string     `json:"blood_group"`
-		HallID       *uuid.UUID `json:"hall_id"`
-		BatchID      *uuid.UUID `json:"batch_id"`
-		SessionID    *uuid.UUID `json:"session_id"`
-		DepartmentID *uuid.UUID `json:"department_id"`
-		UniversityID *uuid.UUID `json:"university_id"`
+		Code       string     `json:"code" binding:"required"`
+		UserID     *uuid.UUID `json:"user_id"` // legacy; must match the token if sent
+		Phone      string     `json:"phone"`
+		BloodGroup string     `json:"blood_group"`
+		HallID     *uuid.UUID `json:"hall_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	filter := map[string]interface{}{
-		"verification_code": req.Code,
-		"is_claimed":        false,
-	}
-
-	students, _, err := h.Usecase.GetAll(c.Request.Context(), filter, 1, 0)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	userID, ok := claimCaller(c, req.UserID)
+	if !ok {
 		return
 	}
 
-	if len(students) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Invalid or already claimed code"})
-		return
-	}
-
-	student := students[0]
-	student.UserID = &req.UserID
-	student.IsClaimed = true
-	student.VerificationCode = "" // Clear code after claim
-
-	// Update additional fields if provided
-	if req.StudentID != "" {
-		student.StudentID = req.StudentID
-	}
+	updates := map[string]interface{}{}
 	if req.Phone != "" {
-		student.Phone = req.Phone
+		updates["phone"] = req.Phone
 	}
 	if req.BloodGroup != "" {
-		student.BloodGroup = req.BloodGroup
-	}
-	if req.HallID != nil {
-		student.HallID = req.HallID
-	}
-	if req.BatchID != nil {
-		student.BatchID = *req.BatchID
-	}
-	if req.SessionID != nil {
-		student.SessionID = *req.SessionID
-	}
-	if req.DepartmentID != nil {
-		student.DepartmentID = *req.DepartmentID
-	}
-	if req.UniversityID != nil {
-		student.UniversityID = *req.UniversityID
+		updates["blood_group"] = req.BloodGroup
 	}
 
-	if err := h.Usecase.Update(c.Request.Context(), &student); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update student profile: " + err.Error()})
+	if req.HallID != nil {
+		var target domain.Student
+		var hall domain.Hall
+		if err := h.db.Where("verification_code = ? AND is_claimed = ?", req.Code, false).First(&target).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Invalid or already claimed code"})
+			return
+		}
+		if err := h.db.First(&hall, "id = ?", *req.HallID).Error; err != nil || hall.UniversityID != target.UniversityID {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Selected hall does not belong to your university"})
+			return
+		}
+		updates["hall_id"] = *req.HallID
+	}
+
+	var student domain.Student
+	if !claimProfile(c, h.db, &student, req.Code, userID, domain.RoleStudent, updates,
+		func(tx *gorm.DB) int64 {
+			var n int64
+			tx.Model(&domain.Student{}).Where("user_id = ?", userID).Count(&n)
+			return n
+		},
+		func() (uuid.UUID, uuid.UUID) { return student.UniversityID, student.DepartmentID },
+	) {
 		return
 	}
-
 	c.JSON(http.StatusOK, student)
 }
 

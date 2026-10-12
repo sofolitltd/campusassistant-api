@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"campusassistant-api/internal/domain"
@@ -36,7 +37,7 @@ func (h *CouponHandler) Create(c *gin.Context) {
 	}
 
 	coupon := &domain.CouponCode{
-		Code:          req.Code,
+		Code:          strings.ToUpper(strings.TrimSpace(req.Code)),
 		DiscountType:  domain.CouponDiscountType(req.DiscountType),
 		DiscountValue: req.DiscountValue,
 		MaxUses:       req.MaxUses,

@@ -32,6 +32,12 @@ type routerEnv struct {
 	student domain.User
 	other   domain.User
 	adminID uuid.UUID
+	gdb     *gorm.DB
+}
+
+func (e *routerEnv) db(t *testing.T) *gorm.DB {
+	t.Helper()
+	return e.gdb
 }
 
 func newRouterEnv(t *testing.T) *routerEnv {
@@ -53,7 +59,7 @@ func newRouterEnv(t *testing.T) *routerEnv {
 		t.Fatal(err)
 	}
 
-	e := &routerEnv{adminID: uuid.New()}
+	e := &routerEnv{adminID: uuid.New(), gdb: db}
 	e.student = domain.User{Email: "s@test.dev", TokenVersion: 1}
 	e.other = domain.User{Email: "o@test.dev", TokenVersion: 1}
 	db.Create(&e.student)
@@ -118,6 +124,10 @@ func TestRouter_MoneyRoutesAreAdminOnly(t *testing.T) {
 		{"PUT", "/api/v1/billing/payouts/" + pid + "/reject"},
 		{"GET", "/api/v1/subscription-plans/" + pid + "/entitlements"},
 		{"PUT", "/api/v1/subscription-plans/" + pid + "/entitlements"},
+		{"GET", "/api/v1/student-verifications"},
+		{"GET", "/api/v1/student-verifications/" + pid},
+		{"PUT", "/api/v1/student-verifications/" + pid + "/approve"},
+		{"PUT", "/api/v1/student-verifications/" + pid + "/reject"},
 	}
 	for _, rt := range routes {
 		if got := e.call(rt.method, rt.path, "").Code; got != 401 {
@@ -207,5 +217,80 @@ func TestRouter_CORSIsNoLongerAWildcard(t *testing.T) {
 	local := e.call("GET", "/health", "", "Origin", "http://localhost:3000")
 	if got := local.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3000" {
 		t.Fatalf("ACAO for localhost in dev = %q", got)
+	}
+}
+
+func (e *routerEnv) callBody(method, path, token, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-key")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	e.r.ServeHTTP(w, req)
+	return w
+}
+
+func TestRouter_ClaimProfileRequiresSignIn(t *testing.T) {
+	e := newRouterEnv(t)
+	for _, path := range []string{"/api/v1/students/claim-profile", "/api/v1/teachers/claim-profile", "/api/v1/staffs/claim-profile"} {
+		body := fmt.Sprintf(`{"code":"123456","user_id":"%s"}`, e.other.ID)
+		if got := e.callBody("POST", path, "", body).Code; got != 401 {
+			t.Errorf("POST %s without a token = %d, want 401", path, got)
+		}
+	}
+}
+
+func TestRouter_ClaimProfileLinksTheTokenUserOnly(t *testing.T) {
+	e := newRouterEnv(t)
+	db := e.db(t)
+	if err := db.AutoMigrate(&domain.Student{}); err != nil {
+		t.Fatal(err)
+	}
+	batchID, uniID, deptID := uuid.New(), uuid.New(), uuid.New()
+	profile := domain.Student{StudentID: "1001", BatchID: batchID, UniversityID: uniID, DepartmentID: deptID, SessionID: uuid.New(), VerificationCode: "654321"}
+	db.Create(&profile)
+	student := e.token(t, e.student.ID, "student")
+
+	// A body user_id that isn't the caller is refused.
+	w := e.callBody("POST", "/api/v1/students/claim-profile", student, fmt.Sprintf(`{"code":"654321","user_id":"%s"}`, e.other.ID))
+	if w.Code != 403 {
+		t.Fatalf("claim for another user = %d (%s), want 403", w.Code, w.Body.String())
+	}
+
+	// Batch/university in the body are ignored; the token user is linked.
+	w = e.callBody("POST", "/api/v1/students/claim-profile", student, fmt.Sprintf(`{"code":"654321","batch_id":"%s"}`, uuid.New()))
+	if w.Code != 200 {
+		t.Fatalf("own claim = %d (%s), want 200", w.Code, w.Body.String())
+	}
+	var got domain.Student
+	db.First(&got, "id = ?", profile.ID)
+	if got.UserID == nil || *got.UserID != e.student.ID || !got.IsClaimed || got.VerificationCode != "" || got.BatchID != batchID {
+		t.Fatalf("claimed profile = user %v claimed %v code %q batch %v", got.UserID, got.IsClaimed, got.VerificationCode, got.BatchID)
+	}
+	var user domain.User
+	db.First(&user, "id = ?", e.student.ID)
+	if !user.IsVerified || user.UniversityID == nil || *user.UniversityID != uniID {
+		t.Fatalf("user after claim: verified %v university %v", user.IsVerified, user.UniversityID)
+	}
+
+	// The code is single use.
+	if got := e.callBody("POST", "/api/v1/students/claim-profile", e.token(t, e.other.ID, "student"), `{"code":"654321"}`).Code; got != 404 {
+		t.Errorf("reusing a claimed code = %d, want 404", got)
+	}
+}
+
+func TestRouter_RegisterIgnoresRequestedRole(t *testing.T) {
+	e := newRouterEnv(t)
+	w := e.callBody("POST", "/api/v1/auth/register", "",
+		`{"email":"new@test.dev","password":"password123","first_name":"N","last_name":"U","role":"university_admin"}`)
+	if w.Code != 201 {
+		t.Fatalf("register = %d (%s), want 201", w.Code, w.Body.String())
+	}
+	var user domain.User
+	e.db(t).First(&user, "email = ?", "new@test.dev")
+	if user.Role != domain.RoleStudent {
+		t.Fatalf("registered role = %q, want student", user.Role)
 	}
 }

@@ -201,12 +201,12 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// Specialized Student Routes
 	studentRepo := postgres.NewGormRepositoryWithOrder[domain.Student](db, "weight ASC, LEFT(student_id, 2) DESC, student_id ASC")
 	studentUsecase := usecase.NewGenericUsecase(studentRepo)
-	studentHandler := handler.NewStudentHandler(studentUsecase)
+	studentHandler := handler.NewStudentHandler(studentUsecase, db)
 	studentGroup := v1.Group("/students")
 	{
 		studentGroup.POST("", guard.Require(middleware.AdminJWT), studentHandler.Create)
 		studentGroup.POST("/verify-code", guard.Require(middleware.Public), studentHandler.VerifyCode)
-		studentGroup.POST("/claim-profile", guard.Require(middleware.Public), studentHandler.ClaimProfile)
+		studentGroup.POST("/claim-profile", middleware.JWTMiddleware(jwtManager, db), studentHandler.ClaimProfile)
 		studentGroup.GET("", guard.Require(middleware.AuthJWT), studentHandler.GetAll)
 		studentGroup.GET("/:id", guard.Require(middleware.AuthJWT), studentHandler.GetByID)
 		studentGroup.PUT("/:id", guard.Require(middleware.AdminJWT), studentHandler.Update)
@@ -236,12 +236,12 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	teacherRepo := postgres.NewGormRepositoryWithOrder[domain.Teacher](db, "weight ASC, name ASC")
 	teacherUsecase := usecase.NewGenericUsecase(teacherRepo)
-	teacherHandler := handler.NewTeacherHandler(teacherUsecase)
+	teacherHandler := handler.NewTeacherHandler(teacherUsecase, db)
 	teacherGroup := v1.Group("/teachers")
 	{
 		teacherGroup.POST("", guard.Require(middleware.AdminJWT), teacherHandler.Create)
 		teacherGroup.POST("/verify-code", guard.Require(middleware.Public), teacherHandler.VerifyCode)
-		teacherGroup.POST("/claim-profile", guard.Require(middleware.Public), teacherHandler.ClaimProfile)
+		teacherGroup.POST("/claim-profile", middleware.JWTMiddleware(jwtManager, db), teacherHandler.ClaimProfile)
 		teacherGroup.GET("", guard.Require(middleware.AuthJWT), teacherHandler.GetAll)
 		teacherGroup.GET("/:id", guard.Require(middleware.AuthJWT), teacherHandler.GetByID)
 		teacherGroup.PUT("/:id", guard.Require(middleware.AdminJWT), teacherHandler.Update)
@@ -255,12 +255,12 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	staffRepo := postgres.NewGormRepositoryWithOrder[domain.Staff](db, "serial ASC, name ASC")
 	staffUsecase := usecase.NewGenericUsecase(staffRepo)
-	staffHandler := handler.NewStaffHandler(staffUsecase)
+	staffHandler := handler.NewStaffHandler(staffUsecase, db)
 	staffGroup := v1.Group("/staffs")
 	{
 		staffGroup.POST("", guard.Require(middleware.AdminJWT), staffHandler.Create)
 		staffGroup.POST("/verify-code", guard.Require(middleware.Public), staffHandler.VerifyCode)
-		staffGroup.POST("/claim-profile", guard.Require(middleware.Public), staffHandler.ClaimProfile)
+		staffGroup.POST("/claim-profile", middleware.JWTMiddleware(jwtManager, db), staffHandler.ClaimProfile)
 		staffGroup.GET("", guard.Require(middleware.AuthJWT), staffHandler.GetAll)
 		staffGroup.GET("/:id", guard.Require(middleware.AuthJWT), staffHandler.GetByID)
 		staffGroup.PUT("/:id", guard.Require(middleware.AdminJWT), staffHandler.Update)
@@ -779,6 +779,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		paymentGroup.POST("/create", bkashHandler.CreatePayment)
 		paymentGroup.POST("/execute", bkashHandler.ExecutePayment)
 		paymentGroup.POST("/cancel", bkashHandler.CancelPayment)
+		paymentGroup.POST("/validate-coupon", bkashHandler.ValidateCoupon)
 		paymentGroup.GET("/transactions", bkashHandler.ListTransactions)
 	}
 
@@ -874,6 +875,25 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		adminFeedbackGroup.GET("", feedbackHandler.GetAll)
 		adminFeedbackGroup.GET("/:id", feedbackHandler.GetByID)
 		adminFeedbackGroup.PUT("/:id", feedbackHandler.Update)
+	}
+
+	// Student Verification — document-based self-onboarding, the
+	// alternative to a CR-issued verification code. Users submit under /my;
+	// admins review under /student-verifications.
+	studentVerificationHandler := handler.NewStudentVerificationHandler(db, postgres.NewStudentVerificationRepository(db), notificationService)
+	myStudentVerificationGroup := v1.Group("/my/student-verification")
+	myStudentVerificationGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		myStudentVerificationGroup.POST("", studentVerificationHandler.Submit)
+		myStudentVerificationGroup.GET("", studentVerificationHandler.GetMine)
+	}
+	adminStudentVerificationGroup := v1.Group("/student-verifications")
+	adminStudentVerificationGroup.Use(middleware.JWTMiddleware(jwtManager, db), guard.Require(middleware.AdminJWT))
+	{
+		adminStudentVerificationGroup.GET("", studentVerificationHandler.GetAll)
+		adminStudentVerificationGroup.GET("/:id", studentVerificationHandler.GetByID)
+		adminStudentVerificationGroup.PUT("/:id/approve", studentVerificationHandler.Approve)
+		adminStudentVerificationGroup.PUT("/:id/reject", studentVerificationHandler.Reject)
 	}
 
 	// Community Routes

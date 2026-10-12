@@ -86,9 +86,17 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 	}
 
 	// Add string filters
-	stringFilters := []string{"course_year", "course_category", "course_code", "name", "slug", "mode", "type", "club_type", "status", "batch", "year", "blood_group", "scope", "category", "target_scope"}
+	stringFilters := []string{"course_year", "course_category", "course_code", "name", "slug", "mode", "type", "club_type", "status", "batch", "year", "blood_group", "scope", "category", "target_scope", "role", "gender"}
 	for _, f := range stringFilters {
 		if val := c.Query(f); val != "" {
+			filter[f] = val
+		}
+	}
+
+	// Add boolean filters (only "true"/"false" are honoured)
+	boolFilters := []string{"is_active", "is_verified", "is_pro"}
+	for _, f := range boolFilters {
+		if val, err := strconv.ParseBool(c.Query(f)); err == nil {
 			filter[f] = val
 		}
 	}

@@ -203,6 +203,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.NotificationMute{},
 		&domain.CouponCode{},
 		&domain.Feedback{},
+		&domain.StudentVerificationRequest{},
 		&domain.UserReward{},
 		&domain.RewardTransaction{},
 	)

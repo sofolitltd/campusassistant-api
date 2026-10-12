@@ -107,8 +107,13 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 			_ = stmt.Parse(&t)
 			isBanner := stmt.Schema != nil && (stmt.Schema.Table == "banners" || stmt.Schema.Name == "Banner")
 			isContact := stmt.Schema != nil && (stmt.Schema.Table == "contacts" || stmt.Schema.Name == "EmergencyContact")
+			isUser := stmt.Schema != nil && (stmt.Schema.Table == "users" || stmt.Schema.Name == "User")
 
-			if (isBanner || isContact) && (key == "university_id" || key == "department_id") {
+			if isUser && (key == "batch_id" || key == "session_id" || key == "blood_group") {
+				// These live on the linked Student row, not on users — filter
+				// through it so the admin Users page can narrow by batch/session.
+				db = db.Where("users.id IN (SELECT user_id FROM students WHERE "+key+" = ? AND deleted_at IS NULL)", value)
+			} else if (isBanner || isContact) && (key == "university_id" || key == "department_id") {
 				// Join with targets for specialized filtering
 				targetTable := "banner_targets"
 				foreignKey := "banner_id"

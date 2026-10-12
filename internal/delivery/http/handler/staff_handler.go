@@ -8,15 +8,18 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type StaffHandler struct {
 	*GenericHandler[domain.Staff]
+	db *gorm.DB
 }
 
-func NewStaffHandler(u usecase.Usecase[domain.Staff]) *StaffHandler {
+func NewStaffHandler(u usecase.Usecase[domain.Staff], db *gorm.DB) *StaffHandler {
 	return &StaffHandler{
 		GenericHandler: NewGenericHandler(u),
+		db:             db,
 	}
 }
 
@@ -78,45 +81,35 @@ func (h *StaffHandler) VerifyCode(c *gin.Context) {
 // POST /staffs/claim-profile
 func (h *StaffHandler) ClaimProfile(c *gin.Context) {
 	var req struct {
-		Code   string    `json:"code" binding:"required"`
-		UserID uuid.UUID `json:"user_id" binding:"required"`
-		Mobile string    `json:"mobile"`
+		Code   string     `json:"code" binding:"required"`
+		UserID *uuid.UUID `json:"user_id"` // legacy; must match the token if sent
+		Mobile string     `json:"mobile"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	filter := map[string]interface{}{
-		"verification_code": req.Code,
-		"is_claimed":        false,
-	}
-
-	staffs, _, err := h.Usecase.GetAll(c.Request.Context(), filter, 1, 0)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	userID, ok := claimCaller(c, req.UserID)
+	if !ok {
 		return
 	}
 
-	if len(staffs) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Invalid or already claimed code"})
-		return
-	}
-
-	staff := staffs[0]
-	staff.UserID = &req.UserID
-	staff.IsClaimed = true
-	staff.VerificationCode = "" // Clear code after claim
-
+	updates := map[string]interface{}{}
 	if req.Mobile != "" {
-		staff.Mobile = req.Mobile
+		updates["mobile"] = req.Mobile
 	}
 
-	if err := h.Usecase.Update(c.Request.Context(), &staff); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update staff profile: " + err.Error()})
+	var staff domain.Staff
+	if !claimProfile(c, h.db, &staff, req.Code, userID, domain.RoleStaff, updates,
+		func(tx *gorm.DB) int64 {
+			var n int64
+			tx.Model(&domain.Staff{}).Where("user_id = ?", userID).Count(&n)
+			return n
+		},
+		func() (uuid.UUID, uuid.UUID) { return staff.UniversityID, staff.DepartmentID },
+	) {
 		return
 	}
-
 	c.JSON(http.StatusOK, staff)
 }
 

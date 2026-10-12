@@ -84,6 +84,22 @@ func (s *PaymentService) ValidateCoupon(ctx context.Context, code string, planID
 	return validateCoupon(coupon, planID, planPrice)
 }
 
+// ValidateCouponForPlan previews a coupon's discount for planID without
+// reserving a use — safe for the client to call (e.g. on "Apply") to show
+// the discounted price before checkout actually starts. The plan's price is
+// loaded server-side, same as CreatePayment, so the client can't influence it.
+func (s *PaymentService) ValidateCouponForPlan(ctx context.Context, code string, planID uuid.UUID) (discounted, original int, err error) {
+	var plan domain.SubscriptionPlan
+	if err := s.db.WithContext(ctx).First(&plan, "id = ?", planID).Error; err != nil {
+		return 0, 0, ErrPlanNotFound
+	}
+	discounted, err = s.ValidateCoupon(ctx, code, planID, plan.Price)
+	if err != nil {
+		return 0, 0, err
+	}
+	return discounted, plan.Price, nil
+}
+
 func validateCoupon(coupon *domain.CouponCode, planID uuid.UUID, planPrice int) (int, error) {
 	if !coupon.IsActive {
 		return 0, ErrCouponNotFound

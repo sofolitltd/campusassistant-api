@@ -29,6 +29,7 @@ func main() {
 	// Drop tables in dependency order (Children first, Roots last)
 	tables := []interface{}{
 		&domain.Verification{},
+		&domain.StudentVerificationRequest{},
 		&domain.AuditLog{},
 		&domain.UserDevice{},
 		&domain.NotificationRecipient{},
