@@ -127,6 +127,24 @@ func (r *statsRepository) GetDashboardStats(ctx context.Context) (*domain.Dashbo
 	return &stats, nil
 }
 
+// GetUserStats computes all counts in a single table scan (COUNT ... FILTER)
+// rather than issuing one query per metric, so the stat row stays cheap even
+// as the users table grows.
+func (r *statsRepository) GetUserStats(ctx context.Context) (*domain.UserStats, error) {
+	var stats domain.UserStats
+	err := r.db.WithContext(ctx).Model(&domain.User{}).Select(`
+		COUNT(*) AS total,
+		COUNT(*) FILTER (WHERE is_active = true) AS active,
+		COUNT(*) FILTER (WHERE is_active = false) AS inactive,
+		COUNT(*) FILTER (WHERE is_verified = true) AS verified,
+		COUNT(*) FILTER (WHERE is_verified = false) AS unverified,
+		COUNT(*) FILTER (WHERE role = 'student') AS students,
+		COUNT(*) FILTER (WHERE role = 'teacher') AS teachers,
+		COUNT(*) FILTER (WHERE role = 'staff') AS staff
+	`).Scan(&stats).Error
+	return &stats, err
+}
+
 func trendStr(prev, curr int64) string {
 	if prev == 0 {
 		return fmt.Sprintf("+%d", curr)

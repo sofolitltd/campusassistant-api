@@ -31,6 +31,18 @@ type DashboardStats struct {
 	RecentSubscriptions []RecentSubscriber  `json:"recent_subscriptions"`
 }
 
+type UserStats struct {
+	Total      int64 `json:"total"`
+	Active     int64 `json:"active"`
+	Inactive   int64 `json:"inactive"`
+	Verified   int64 `json:"verified"`
+	Unverified int64 `json:"unverified"`
+	Students   int64 `json:"students"`
+	Teachers   int64 `json:"teachers"`
+	Staff      int64 `json:"staff"`
+}
+
 type StatsRepository interface {
 	GetDashboardStats(ctx context.Context) (*DashboardStats, error)
+	GetUserStats(ctx context.Context) (*UserStats, error)
 }

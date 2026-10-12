@@ -43,6 +43,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	// Middlewares
 	r.Use(middleware.AccessLogger())
+	r.Use(middleware.SystemLogger(db))
 	r.Use(gin.Recovery())
 	corsOrigins := config.SplitList(cfg.CORSAllowedOrigins)
 	// Built-in origins for the hosted Flutter web app (Firebase Hosting serves both domains).
@@ -162,6 +163,15 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		adminsGroup.PUT("/:id", adminHandler.Update)
 		adminsGroup.PUT("/:id/password", adminHandler.ChangePassword)
 		adminsGroup.DELETE("/:id", adminHandler.Delete)
+	}
+
+	// System logs — read-only view onto rows middleware.SystemLogger writes
+	// for every failed (4xx/5xx) request. Admin dashboard's Logs page.
+	systemLogHandler := handler.NewSystemLogHandler(db)
+	systemLogsGroup := v1.Group("/system-logs")
+	{
+		systemLogsGroup.GET("", guard.Require(middleware.AdminJWT), systemLogHandler.List)
+		systemLogsGroup.GET("/stats", guard.Require(middleware.AdminJWT), systemLogHandler.Stats)
 	}
 
 	// Helper to register generic routes
@@ -406,6 +416,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	statsRepo := postgres.NewStatsRepository(db)
 	statsHandler := handler.NewStatsHandler(statsRepo)
 	v1.GET("/stats", guard.Require(middleware.AdminJWT), statsHandler.GetDashboardStats)
+	v1.GET("/users/stats", guard.Require(middleware.AdminJWT), statsHandler.GetUserStats)
 
 	// Rewards: coin-based system for resource access. Users earn coins by
 	// watching ads, spend coins to access resources by file size.

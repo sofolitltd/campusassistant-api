@@ -120,6 +120,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.Attachment{},
 		&domain.Hall{},
 		&domain.AuditLog{},
+		&domain.SystemLog{},
 		&domain.Notification{},
 		&domain.NotificationRecipient{},
 		&domain.UserDevice{},
