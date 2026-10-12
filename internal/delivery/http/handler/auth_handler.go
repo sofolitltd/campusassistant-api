@@ -209,13 +209,21 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	user.ComputeSubscriptionStatus()
-	h.markCR(&user)
+	// Reload with Student/Teacher/Staff relations and populate the same
+	// derived fields GetMe does — without this, a freshly logged-in client
+	// sees blank hall/blood/batch even when they're already saved, since
+	// those aren't columns on User itself (see domain.User's Hall/Blood
+	// comment) and the plain `user` above never loaded the Student relation.
+	fullUser, err := h.loadFullUser(user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+		return
+	}
 
 	c.JSON(http.StatusOK, AuthResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
-		User:         user,
+		User:         fullUser,
 		ExpiresIn:    int64(h.accessTokenExpiry * 60),
 	})
 }
@@ -487,14 +495,28 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 		return
 	}
 
+	user, err := h.loadFullUser(userID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, user)
+}
+
+// loadFullUser fetches a user by ID with Student/Teacher/Staff relations
+// preloaded and populates the derived fields (batch/hall/blood group,
+// subscription status, CR flag, university/department fallbacks) that any
+// handler returning a full user profile needs — shared by GetMe and Login
+// so both agree on the same user shape.
+func (h *AuthHandler) loadFullUser(userID any) (domain.User, error) {
 	var user domain.User
 	if err := h.db.
 		Preload("Student.Batch").Preload("Student.Department").Preload("Student.University").Preload("Student.Hall").
 		Preload("Teacher.Department").Preload("Teacher.University").
 		Preload("Staff.Department").Preload("Staff.University").
 		First(&user, userID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
+		return user, err
 	}
 
 	// Populate batch/hall/blood group from the Student relation — these
@@ -532,7 +554,7 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 		user.DepartmentID = &user.Staff.DepartmentID
 	}
 
-	c.JSON(http.StatusOK, user)
+	return user, nil
 }
 
 // markCR sets user.IsCR from the cr table so the client's CR-only actions match
