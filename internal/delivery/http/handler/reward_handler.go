@@ -116,6 +116,111 @@ func (h *RewardHandler) Earn(c *gin.Context) {
 	})
 }
 
+const (
+	dailyLoginRewardDescription = "Daily login reward"
+	dailyLoginRewardAmount      = 1
+)
+
+type DailyLoginResponse struct {
+	Balance        int  `json:"balance"`
+	LifetimeEarned int  `json:"lifetime_earned"`
+	LifetimeSpent  int  `json:"lifetime_spent"`
+	Earned         int  `json:"earned"`
+	AlreadyClaimed bool `json:"already_claimed"`
+}
+
+type DailyLoginStatusResponse struct {
+	AlreadyClaimed bool `json:"already_claimed"`
+	RewardAmount   int  `json:"reward_amount"`
+}
+
+// GET /rewards/daily-login/status — read-only check, does not claim anything.
+// Used by the client to decide whether to show the claim button as available.
+func (h *RewardHandler) GetDailyLoginStatus(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+
+	now := time.Now()
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	var count int64
+	if err := h.db.WithContext(c.Request.Context()).
+		Model(&domain.RewardTransaction{}).
+		Where("user_id = ? AND type = ? AND description = ? AND created_at >= ?",
+			userID, domain.RewardEarn, dailyLoginRewardDescription, startOfDay).
+		Count(&count).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check daily reward status"})
+		return
+	}
+
+	c.JSON(http.StatusOK, DailyLoginStatusResponse{
+		AlreadyClaimed: count > 0,
+		RewardAmount:   dailyLoginRewardAmount,
+	})
+}
+
+// POST /rewards/daily-login — grants a fixed token reward once per calendar day.
+func (h *RewardHandler) DailyLogin(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+
+	now := time.Now()
+	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	var count int64
+	if err := h.db.WithContext(c.Request.Context()).
+		Model(&domain.RewardTransaction{}).
+		Where("user_id = ? AND type = ? AND description = ? AND created_at >= ?",
+			userID, domain.RewardEarn, dailyLoginRewardDescription, startOfDay).
+		Count(&count).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check daily reward status"})
+		return
+	}
+
+	reward, err := h.rewardRepo.GetOrCreate(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get balance"})
+		return
+	}
+
+	if count > 0 {
+		c.JSON(http.StatusOK, DailyLoginResponse{
+			Balance:        reward.Balance,
+			LifetimeEarned: reward.LifetimeEarned,
+			LifetimeSpent:  reward.LifetimeSpent,
+			Earned:         0,
+			AlreadyClaimed: true,
+		})
+		return
+	}
+
+	reward.Balance += dailyLoginRewardAmount
+	reward.LifetimeEarned += dailyLoginRewardAmount
+
+	if err := h.rewardRepo.UpdateBalance(c.Request.Context(), reward); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update balance"})
+		return
+	}
+
+	txn := &domain.RewardTransaction{
+		UserID:       userID,
+		Type:         domain.RewardEarn,
+		Amount:       dailyLoginRewardAmount,
+		BalanceAfter: reward.Balance,
+		Description:  dailyLoginRewardDescription,
+	}
+	if err := h.rewardRepo.CreateTransaction(c.Request.Context(), txn); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to record transaction"})
+		return
+	}
+
+	c.JSON(http.StatusOK, DailyLoginResponse{
+		Balance:        reward.Balance,
+		LifetimeEarned: reward.LifetimeEarned,
+		LifetimeSpent:  reward.LifetimeSpent,
+		Earned:         dailyLoginRewardAmount,
+		AlreadyClaimed: false,
+	})
+}
+
 type SpendResponse struct {
 	Spent      int  `json:"spent"`
 	Balance    int  `json:"balance"`

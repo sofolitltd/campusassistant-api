@@ -55,9 +55,6 @@ type Config struct {
 	SMTPFromEmail string `mapstructure:"SMTP_FROM_EMAIL"`
 	SMTPFromName  string `mapstructure:"SMTP_FROM_NAME"`
 
-	// Migrations
-	DBAutoMigrate bool `mapstructure:"DB_AUTO_MIGRATE"`
-
 	// JWT Authentication
 	JWTSecret             string `mapstructure:"JWT_SECRET"`
 	JWTAccessTokenExpiry  int    `mapstructure:"JWT_ACCESS_TOKEN_EXPIRY"`  // in minutes
@@ -123,7 +120,6 @@ func LoadConfig() (*Config, error) {
 	v.BindEnv("JWT_SECRET")
 	v.BindEnv("JWT_ACCESS_TOKEN_EXPIRY")
 	v.BindEnv("JWT_REFRESH_TOKEN_EXPIRY")
-	v.BindEnv("DB_AUTO_MIGRATE")
 	v.BindEnv("FIREBASE_CREDENTIALS_JSON")
 	v.BindEnv("FIREBASE_CREDENTIALS_FILE")
 	v.BindEnv("BKASH_PRODUCTION")

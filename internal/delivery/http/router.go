@@ -417,6 +417,13 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		bannerGroup.DELETE("/:id", guard.Require(middleware.AdminJWT), bannerHandler.Delete)
 	}
 
+	// App Config: singleton read by the mobile app on launch to decide
+	// whether the installed build must be force-updated (see
+	// AppConfig.MinSupportedVersionCode). Public read so it works pre-login.
+	appConfigHandler := handler.NewAppConfigHandler(db)
+	v1.GET("/app-config", guard.Require(middleware.Public), appConfigHandler.GetAppConfig)
+	v1.PUT("/app-config", guard.Require(middleware.AdminJWT), appConfigHandler.UpdateAppConfig)
+
 	// Dashboard Stats
 	statsRepo := postgres.NewStatsRepository(db)
 	statsHandler := handler.NewStatsHandler(statsRepo)
@@ -433,6 +440,8 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	{
 		rewardGroup.GET("/balance", rewardHandler.GetBalance)
 		rewardGroup.POST("/earn", rewardHandler.Earn)
+		rewardGroup.GET("/daily-login/status", rewardHandler.GetDailyLoginStatus)
+		rewardGroup.POST("/daily-login", rewardHandler.DailyLogin)
 		rewardGroup.POST("/spend/:resourceId", rewardHandler.Spend)
 		rewardGroup.GET("/transactions", rewardHandler.GetTransactions)
 	}

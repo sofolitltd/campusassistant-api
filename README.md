@@ -18,9 +18,12 @@ Enterprise-grade Go backend for campus resource management with **JWT authentica
 
 ### Running the server
 ```bash
+make migrate  # only needed after pulling/writing a domain model change
 make run
 ```
 This will automatically generate Swagger documentation and start the server on `http://localhost:8080`.
+
+📖 **[Database Migrations Guide](docs/MIGRATIONS.md)** — why `migrate` and `run` are separate, and when to run which.
 
 ## 🔐 Authentication
 
@@ -54,7 +57,7 @@ GET /api/v1/auth/me
 Authorization: Bearer <your_access_token>
 ```
 
-📖 **[Complete Authentication Guide](JWT_AUTH.md)**
+📖 **[Complete Authentication Guide](docs/JWT_AUTH.md)**
 
 ## 📚 API Documentation
 
@@ -71,22 +74,12 @@ Once the server is running, you can access the interactive Swagger UI at:
 - **☁️ Cloud Integration**: R2 Storage for file uploads
 - **🔒 Enterprise Ready**: Soft deletions, Audit logs, and JSONB support
 
-## 🧪 Testing
-
-### Authentication Tests
-Use the `auth_tests.rest` file for JWT authentication testing:
-```bash
-# Test registration, login, token refresh, and protected routes
-```
-
-### API Tests
-Use the `api_tests.rest` file with the VS Code REST Client for automated integration testing.
-
 ## 📁 Project Structure
 
 ```
 campusassistant-api/
 ├── cmd/api/              # Application entry point
+├── cmd/migrate/          # Schema migration command (run explicitly, see docs/MIGRATIONS.md)
 ├── internal/
 │   ├── config/           # Configuration management
 │   ├── delivery/http/    # HTTP handlers and routes
@@ -98,9 +91,7 @@ campusassistant-api/
 ├── pkg/
 │   ├── auth/             # JWT and password utilities
 │   └── storage/          # File storage (R2)
-├── auth_tests.rest       # Authentication API tests
-├── api_tests.rest        # General API tests
-└── JWT_AUTH.md           # Authentication documentation
+└── docs/                 # Project docs (migrations, billing, marketplace, deploy, todo)
 ```
 
 ## 🔧 Configuration
@@ -126,9 +117,12 @@ R2_SECRET_ACCESS_KEY=...
 
 ## 📖 Documentation
 
-- **[JWT Authentication Guide](JWT_AUTH.md)** - Complete auth documentation
-- **[Implementation Summary](AUTH_IMPLEMENTATION_SUMMARY.md)** - What was built
-- **[Project Plan](PLAN.md)** - Architecture overview
+- **[Database Migrations Guide](docs/MIGRATIONS.md)** - Schema workflow: `make migrate` vs `make run`
+- **[JWT Authentication Guide](docs/JWT_AUTH.md)** - Complete auth documentation
+- **[Billing](docs/BILLING.md)** - Billing/ledger design
+- **[Marketplace](docs/MARKETPLACE.md)** - Marketplace design
+- **[Coolify Deploy](docs/DEPLOY_COOLIFY.md)** - Deploy notes
+- **[TODO](docs/TODO.md)** - Outstanding work
 
 ## 🌟 Why This Stack?
 

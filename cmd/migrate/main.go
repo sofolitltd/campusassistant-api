@@ -1,5 +1,7 @@
-//go:build ignore
-
+// Command migrate runs database migrations on demand. The API server
+// (cmd/api) no longer migrates on every boot — run this explicitly after
+// pulling changes that add/modify a domain model, then start the API
+// normally. See docs/MIGRATIONS.md for the full workflow.
 package main
 
 import (
@@ -20,10 +22,9 @@ func main() {
 		log.Fatalf("Database connection failed: %v", err)
 	}
 
-	log.Println("Running database migrations...")
 	if err := postgres.RunMigrations(db); err != nil {
-		log.Fatalf("Migrations failed: %v", err)
+		log.Fatalf("Migration failed: %v", err)
 	}
 
-	log.Println("Database migrations completed successfully!")
+	log.Println("Migrations completed successfully.")
 }
