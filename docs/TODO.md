@@ -154,8 +154,8 @@ rm -f "$FILE"
    createdb campusassistant_restoretest
    gunzip -c campusassistant-<stamp>.sql.gz | psql campusassistant_restoretest
    ```
-3. Point a local API at it (`DATABASE_URL=...campusassistant_restoretest`,
-   `DB_AUTO_MIGRATE=false`) and run `go run ./cmd/api/main.go`.
+3. Point a local API at it (`DATABASE_URL=...campusassistant_restoretest`) and
+   run `go run ./cmd/migrate` once, then `go run ./cmd/api/main.go`.
 4. Hit `/health` and spot-check a few endpoints. Confirm row counts look sane
    (`users`, `subscriptions`).
 5. Drop the test database.

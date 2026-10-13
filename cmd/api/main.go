@@ -8,9 +8,9 @@ import (
 
 	"campusassistant-api/internal/config"
 	httpDelivery "campusassistant-api/internal/delivery/http"
-	"campusassistant-api/internal/service"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/repository/postgres"
+	"campusassistant-api/internal/service"
 	"campusassistant-api/pkg/bkash"
 	"campusassistant-api/pkg/logger"
 )
@@ -48,16 +48,9 @@ func main() {
 		logger.Fatalf("Database connection failed: %v", err)
 	}
 
-	// 4. Run Migrations (Conditional)
-	// Only run migrations in development or if explicitly enabled
-	if cfg.Environment == "development" || cfg.DBAutoMigrate {
-		logger.Infof("Migrations enabled (Mode: %s, AutoMigrate: %v). Running...", cfg.Environment, cfg.DBAutoMigrate)
-		if err := postgres.RunMigrations(db); err != nil {
-			logger.Fatalf("Migration failed: %v", err)
-		}
-	} else {
-		logger.Infof("Migrations skipped for production (Set DB_AUTO_MIGRATE=true to enable)")
-	}
+	// 4. Schema migrations are never run from here — `cmd/api` only serves
+	// traffic. Run `make migrate` (or `go run ./cmd/migrate`) explicitly
+	// after pulling/writing a domain model change. See docs/MIGRATIONS.md.
 
 	// 5. Setup Router
 	r := httpDelivery.NewRouter(cfg, db)

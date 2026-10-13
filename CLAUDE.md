@@ -8,16 +8,26 @@ Go REST backend (Gin + GORM + PostgreSQL) for the Campus Assistant platform — 
 
 ## Commands
 
-- `make run` — `go run ./cmd/api/main.go`, starts on `:8080` (or `$PORT`)
+- `make run` — `go run ./cmd/api/main.go`, starts on `:8080` (or `$PORT`). **Never migrates the schema** — see the migration rule below.
+- `make migrate` — `go run ./cmd/migrate`, applies `internal/domain/*.go` changes to the database (GORM AutoMigrate + one-off cleanup steps, `internal/repository/postgres/connection.go`'s `RunMigrations`). Run this, then `make run`.
 - `make build` — cross-compiles a linux/amd64 binary to `./campusassistant-api`
 - `make reset-db` — runs `scripts/reset_db.go`
-- No automated tests exist (`go test` has nothing to run — no `*_test.go` files anywhere). Manual API testing is done via `api_tests.rest` / `auth_tests.rest` (VS Code REST Client format).
+- No automated tests exist (`go test` has nothing to run — no `*_test.go` files anywhere).
 - No linter is configured beyond `go vet`/`gofmt` conventions; no CI workflow exists.
-- **Swagger is not actually implemented** — despite README/PLAN.md mentioning it, there's no `docs/` folder, no `swag` codegen, and no `/swagger` route. Don't assume it exists.
+- **Swagger is not actually implemented** — despite the README mentioning it, there's no `swag` codegen and no `/swagger` route. Don't assume it exists.
+
+### Migration rule — read this before telling the user how to run the app
+
+`cmd/api` never touches the schema, period — no env var re-enables it. Schema sync is a separate, explicit step: `cmd/migrate`. There's no CI/CD here and `DATABASE_URL` currently points at the same Postgres the deployed API uses, so running `make migrate` from a dev machine *is* the production migration step — run it before `make build && git push` for any schema change. Full rationale and workflow: [docs/MIGRATIONS.md](docs/MIGRATIONS.md).
+
+When advising the user on how to run the app, or right after making/pulling a change yourself:
+- **If nothing under `internal/domain/*.go` changed** (no new/renamed/retyped field, no new model) since their database was last migrated → tell them to just run `make run`. Don't tell them to run `make migrate` "just in case" — it's a no-op when nothing changed, but needlessly telling them to run it trains them to ignore the distinction this setup exists to create.
+- **If you (or a diff/pull they mention) touched `internal/domain/*.go`, or added a model to the `db.AutoMigrate(...)` call in `connection.go`** → tell them to run `make migrate` once, *then* `make run`.
+- **If you add a new one-off legacy cleanup/backfill step inside `RunMigrations`** → wrap it in the existing `once(db, "unique_key", func() error { ... })` helper, not a bare `if`. Never reuse an existing key for different logic — the ledger (`schema_migrations` table / `domain.SchemaMigration`) is what makes old steps free to keep around forever instead of re-running on every migrate.
 
 ## Config
 
-Viper loads `.env` (falls back to real env vars if the file is missing) — see `.env.example`. Key vars: `DATABASE_URL`, `PORT`, `ENVIRONMENT` (dev enables auto-migrate), `DB_AUTO_MIGRATE`, `API_KEY`, `JWT_SECRET` + `JWT_ACCESS_TOKEN_EXPIRY`/`JWT_REFRESH_TOKEN_EXPIRY`, `R2_ACCESS_KEY_ID`/`R2_SECRET`/`R2_BUCKET_NAME`/`R2_ACCOUNT_ID`/`R2_PUBLIC_URL`, `FIREBASE_CREDENTIALS_FILE`/`FIREBASE_CREDENTIALS_JSON` (push disabled silently if unset), `BKASH_*` (sandbox by default, prod via `BKASH_PRODUCTION`).
+Viper loads `.env` (falls back to real env vars if the file is missing) — see `.env.example`. Key vars: `DATABASE_URL`, `PORT`, `ENVIRONMENT`, `API_KEY`, `JWT_SECRET` + `JWT_ACCESS_TOKEN_EXPIRY`/`JWT_REFRESH_TOKEN_EXPIRY`, `R2_ACCESS_KEY_ID`/`R2_SECRET`/`R2_BUCKET_NAME`/`R2_ACCOUNT_ID`/`R2_PUBLIC_URL`, `FIREBASE_CREDENTIALS_FILE`/`FIREBASE_CREDENTIALS_JSON` (push disabled silently if unset), `BKASH_*` (sandbox by default, prod via `BKASH_PRODUCTION`).
 
 `cmd/api/main.go` also starts two background goroutines on boot: an hourly subscription-expiry sweep and a daily deleted-message cleanup (90-day cutoff).
 
@@ -43,7 +53,7 @@ Two independent, stackable middlewares (`internal/delivery/http/middleware/`):
 
 `RoleMiddleware`/`UniversityMiddleware`/`DepartmentMiddleware` exist in `jwt_middleware.go` but are **not currently used anywhere** — RBAC scaffolding exists but isn't wired into routes; don't assume role checks are enforced unless you see a handler explicitly reading `c.Get("user_role")`.
 
-**Session management** (see `SESSION_MANAGEMENT.md` for the full design): every user has a `TokenVersion int` column; it's embedded in every access token. `POST /devices/logout-all` increments it (kills every session everywhere); `POST /devices/logout-others` increments + immediately re-issues a token for the current session only.
+**Session management** (see [docs/JWT_AUTH.md](docs/JWT_AUTH.md) for the full design): every user has a `TokenVersion int` column; it's embedded in every access token. `POST /devices/logout-all` increments it (kills every session everywhere); `POST /devices/logout-others` increments + immediately re-issues a token for the current session only.
 
 WebSocket routes (`/ws/chat/:id`, `/ws/notifications`) are registered on the raw router (not the `/api/v1` group) — JWT-gated only, no API key.
 

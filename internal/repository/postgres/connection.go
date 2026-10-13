@@ -20,9 +20,9 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 	}
 
 	gormConfig := &gorm.Config{
-		Logger:                 logger.Default.LogMode(logger.Warn),
-		PrepareStmt:            false,
-		SkipDefaultTransaction:             true,
+		Logger:                                   logger.Default.LogMode(logger.Warn),
+		PrepareStmt:                              false,
+		SkipDefaultTransaction:                   true,
 		DisableForeignKeyConstraintWhenMigrating: true,
 	}
 
@@ -40,10 +40,10 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 		return nil, err
 	}
 
-	// Lower connection pool for serverless environments (Vercel/Neon)
+	// Pool sized for a small VPS (1 CPU core, 2GB RAM) running Postgres alongside the app.
 	if cfg.Environment == "production" {
-		sqlDB.SetMaxIdleConns(2)
-		sqlDB.SetMaxOpenConns(10)
+		sqlDB.SetMaxIdleConns(3)
+		sqlDB.SetMaxOpenConns(15)
 	} else {
 		sqlDB.SetMaxIdleConns(10)
 		sqlDB.SetMaxOpenConns(100)
@@ -54,50 +54,88 @@ func NewConnection(cfg *config.Config) (*gorm.DB, error) {
 	return db, nil
 }
 
+// once runs fn exactly one time across the life of the database: it checks
+// the schema_migrations ledger for key, skips if already recorded, and
+// records it after fn succeeds. This replaces re-running (and re-logging)
+// every ad-hoc legacy cleanup step's HasTable/HasColumn checks on every boot
+// — once a step has applied, later runs skip it outright.
+func once(db *gorm.DB, key string, fn func() error) {
+	var count int64
+	db.Model(&domain.SchemaMigration{}).Where("key = ?", key).Count(&count)
+	if count > 0 {
+		return
+	}
+	log.Printf("[MIGRATION] Running one-time step: %s", key)
+	if err := fn(); err != nil {
+		log.Printf("[MIGRATION] one-time step %q failed, will retry next run: %v", key, err)
+		return
+	}
+	if err := db.Create(&domain.SchemaMigration{Key: key, AppliedAt: time.Now()}).Error; err != nil {
+		log.Printf("[MIGRATION] failed to record one-time step %q as applied: %v", key, err)
+	}
+}
+
 func RunMigrations(db *gorm.DB) error {
 	log.Println("[MIGRATION] Starting database migrations...")
 
-	// Fix for subscription_plans.duration_days NOT NULL constraint error
-	// If the column exists, update null values to a default (e.g., 30) before GORM tries to make it NOT NULL
-	if db.Migrator().HasTable(&domain.SubscriptionPlan{}) {
-		if db.Migrator().HasColumn(&domain.SubscriptionPlan{}, "duration_days") {
-			db.Model(&domain.SubscriptionPlan{}).Where("duration_days IS NULL").Update("duration_days", 30)
-		}
+	// Ledger table for the `once` helper below — must exist before anything
+	// else checks it.
+	if err := db.AutoMigrate(&domain.SchemaMigration{}); err != nil {
+		return fmt.Errorf("failed to create schema_migrations ledger: %w", err)
 	}
 
+	// Fix for subscription_plans.duration_days NOT NULL constraint error
+	// If the column exists, update null values to a default (e.g., 30) before GORM tries to make it NOT NULL
+	once(db, "backfill_subscription_plans_duration_days", func() error {
+		if db.Migrator().HasTable(&domain.SubscriptionPlan{}) && db.Migrator().HasColumn(&domain.SubscriptionPlan{}, "duration_days") {
+			db.Model(&domain.SubscriptionPlan{}).Where("duration_days IS NULL").Update("duration_days", 30)
+		}
+		return nil
+	})
+
 	// Clean up legacy columns for Transport
-	if db.Migrator().HasTable("transports") {
-		for _, col := range []string{"route_name", "bus_number", "schedule", "driver_contact"} {
-			if db.Migrator().HasColumn("transports", col) {
-				db.Migrator().DropColumn("transports", col)
+	once(db, "cleanup_transports_legacy_columns", func() error {
+		if db.Migrator().HasTable("transports") {
+			for _, col := range []string{"route_name", "bus_number", "schedule", "driver_contact"} {
+				if db.Migrator().HasColumn("transports", col) {
+					db.Migrator().DropColumn("transports", col)
+				}
+			}
+			// If "title" column does not exist yet, it will be added by AutoMigrate.
+			// If there are existing rows, they will have NULL in "title", causing constraint failure.
+			// To prevent this, we delete all rows from transports if "title" column is missing.
+			if !db.Migrator().HasColumn("transports", "title") {
+				log.Println("[MIGRATION] Dropping legacy rows from transports to avoid NOT NULL constraint errors")
+				db.Exec("DELETE FROM transports")
 			}
 		}
-		// If "title" column does not exist yet, it will be added by AutoMigrate.
-		// If there are existing rows, they will have NULL in "title", causing constraint failure.
-		// To prevent this, we delete all rows from transports if "title" column is missing.
-		if !db.Migrator().HasColumn("transports", "title") {
-			log.Println("[MIGRATION] Dropping legacy rows from transports to avoid NOT NULL constraint errors")
-			db.Exec("DELETE FROM transports")
-		}
-	}
+		return nil
+	})
 
 	// Notifications moved from one-row-per-recipient to a content row + per-user
 	// recipient row. Drop the old shape so AutoMigrate recreates it cleanly —
 	// existing rows are disposable, there's no external system depending on them.
-	if db.Migrator().HasTable(&domain.Notification{}) && db.Migrator().HasColumn(&domain.Notification{}, "user_id") {
-		log.Println("[MIGRATION] Dropping legacy per-recipient notifications table")
-		db.Migrator().DropTable("notifications")
-	}
+	once(db, "drop_legacy_notifications_table", func() error {
+		if db.Migrator().HasTable(&domain.Notification{}) && db.Migrator().HasColumn(&domain.Notification{}, "user_id") {
+			log.Println("[MIGRATION] Dropping legacy per-recipient notifications table")
+			db.Migrator().DropTable("notifications")
+		}
+		return nil
+	})
 
 	// FCMToken moved off User onto a dedicated UserDevice table (multi-device
 	// support) — it was never actually read/written anywhere, safe to drop.
-	if db.Migrator().HasTable(&domain.User{}) && db.Migrator().HasColumn(&domain.User{}, "fcm_token") {
-		log.Println("[MIGRATION] Dropping legacy users.fcm_token column")
-		db.Migrator().DropColumn(&domain.User{}, "fcm_token")
-	}
+	once(db, "drop_users_fcm_token", func() error {
+		if db.Migrator().HasTable(&domain.User{}) && db.Migrator().HasColumn(&domain.User{}, "fcm_token") {
+			log.Println("[MIGRATION] Dropping legacy users.fcm_token column")
+			db.Migrator().DropColumn(&domain.User{}, "fcm_token")
+		}
+		return nil
+	})
 
 	// AutoMigrate all models
 	err := db.AutoMigrate(
+		&domain.AppConfig{},
 		&domain.University{},
 		&domain.Faculty{},
 		&domain.Department{},
@@ -212,54 +250,65 @@ func RunMigrations(db *gorm.DB) error {
 	}
 
 	// Drop legacy columns from earlier schema iterations
-	if db.Migrator().HasColumn(&domain.Message{}, "deleted_by_user") {
-		db.Migrator().DropColumn(&domain.Message{}, "deleted_by_user")
-	}
+	once(db, "drop_message_deleted_by_user", func() error {
+		if db.Migrator().HasColumn(&domain.Message{}, "deleted_by_user") {
+			db.Migrator().DropColumn(&domain.Message{}, "deleted_by_user")
+		}
+		return nil
+	})
 
 	// Cleanup legacy tables
-	legacyTables := []string{"notes", "books", "questions", "syllabuses", "emergency_contacts"}
-	for _, table := range legacyTables {
-		if db.Migrator().HasTable(table) {
-			db.Migrator().DropTable(table)
-		}
-	}
-
-	// Drop legacy columns from modernized tables to prevent NOT NULL constraint errors
-	if db.Migrator().HasColumn("contacts", "scope") {
-		db.Migrator().DropColumn("contacts", "scope")
-	}
-	if db.Migrator().HasColumn("contacts", "university_id") {
-		db.Migrator().DropColumn("contacts", "university_id")
-	}
-	if db.Migrator().HasColumn("contacts", "department_id") {
-		db.Migrator().DropColumn("contacts", "department_id")
-	}
-
-	// Drop legacy uploader columns from resources (migrated to created_by_id FK)
-	if db.Migrator().HasTable("resources") {
-		for _, col := range []string{"uploader_id", "uploader_uid", "uploader_name"} {
-			if db.Migrator().HasColumn("resources", col) {
-				db.Migrator().DropColumn("resources", col)
+	once(db, "drop_legacy_tables", func() error {
+		legacyTables := []string{"notes", "books", "questions", "syllabuses", "emergency_contacts"}
+		for _, table := range legacyTables {
+			if db.Migrator().HasTable(table) {
+				db.Migrator().DropTable(table)
 			}
 		}
-	}
+		return nil
+	})
+
+	// Drop legacy columns from modernized tables to prevent NOT NULL constraint errors
+	once(db, "drop_contacts_legacy_columns", func() error {
+		for _, col := range []string{"scope", "university_id", "department_id"} {
+			if db.Migrator().HasColumn("contacts", col) {
+				db.Migrator().DropColumn("contacts", col)
+			}
+		}
+		return nil
+	})
+
+	// Drop legacy uploader columns from resources (migrated to created_by_id FK)
+	once(db, "drop_resources_uploader_columns", func() error {
+		if db.Migrator().HasTable("resources") {
+			for _, col := range []string{"uploader_id", "uploader_uid", "uploader_name"} {
+				if db.Migrator().HasColumn("resources", col) {
+					db.Migrator().DropColumn("resources", col)
+				}
+			}
+		}
+		return nil
+	})
 
 	// Backfill organizational IDs on existing community posts (new columns
 	// start NULL). Derive from the author's student record so old posts show
 	// in the correct filtered feeds.
-	if db.Migrator().HasColumn(&domain.CommunityPost{}, "university_id") {
-		if err := db.Exec(`
-			UPDATE community_posts cp
-			SET university_id = s.university_id,
-			    department_id = s.department_id,
-			    batch_id      = s.batch_id
-			FROM students s
-			WHERE cp.author_id = s.user_id
-			  AND cp.university_id IS NULL
-		`).Error; err != nil {
-			log.Printf("[MIGRATION] community_posts backfill warning: %v", err)
+	once(db, "backfill_community_posts_org_ids", func() error {
+		if db.Migrator().HasColumn(&domain.CommunityPost{}, "university_id") {
+			if err := db.Exec(`
+				UPDATE community_posts cp
+				SET university_id = s.university_id,
+				    department_id = s.department_id,
+				    batch_id      = s.batch_id
+				FROM students s
+				WHERE cp.author_id = s.user_id
+				  AND cp.university_id IS NULL
+			`).Error; err != nil {
+				log.Printf("[MIGRATION] community_posts backfill warning: %v", err)
+			}
 		}
-	}
+		return nil
+	})
 
 	log.Println("[MIGRATION] Database migrations completed successfully")
 	return nil

@@ -29,7 +29,7 @@ All status changes go through `OrderService` (`internal/service/order_service.go
 - Operators: `GET /billing/marketplace-metrics` (also on the admin Billing overview).
 
 ## Deploy checklist
-1. Run once with `DB_AUTO_MIGRATE=true` (new tables `order_events`, `product_reviews`, `wishlist_items`, `commission_policies`; new columns on `products` and `merchants`).
+1. Run `make migrate` once (new tables `order_events`, `product_reviews`, `wishlist_items`, `commission_policies`; new columns on `products` and `merchants`).
 2. Rebuild the binary (`make build`); the committed one is stale.
 3. Ship the API before the app builds: older app builds keep working, they just don't show the new features.
 4. In admin → Billing → Commission, turn the promo on if you want it.
