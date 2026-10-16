@@ -40,6 +40,13 @@ type User struct {
 	IsPro      bool       `gorm:"default:false" json:"is_pro"`
 	ProExpiry  *time.Time `json:"pro_expiry,omitempty"`
 
+	// Referral (see domain/referral.go). ReferralCode is nullable so the
+	// unique index ignores users who have never opened their invite screen —
+	// codes are issued lazily.
+	ReferralCode       *string    `gorm:"size:12;uniqueIndex" json:"referral_code,omitempty"`
+	ReferredByID       *uuid.UUID `gorm:"type:uuid;index" json:"-"`
+	ReferralRewardedAt *time.Time `json:"-"`
+
 	// Privacy Settings
 	IsPhonePublic bool `gorm:"default:false" json:"is_phone_public"`
 	IsEmailPublic bool `gorm:"default:false" json:"is_email_public"`

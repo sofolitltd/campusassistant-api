@@ -310,6 +310,27 @@ func RunMigrations(db *gorm.DB) error {
 		return nil
 	})
 
+	// Composite primary keys only index lookups by their *first* column, and
+	// GORM never indexes the second one. These are the second columns we
+	// actually filter by: "resources/chapters/courses/levels for my batch" and
+	// "my conversations" / "posts I liked". Names follow GORM's idx_<table>_<col>
+	// so a later `index` tag on the same column won't create a duplicate.
+	once(db, "index_composite_pk_second_columns", func() error {
+		for _, stmt := range []string{
+			`CREATE INDEX IF NOT EXISTS idx_resource_batches_batch_id ON resource_batches (batch_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_chapter_batches_batch_id ON chapter_batches (batch_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_course_batches_batch_id ON course_batches (batch_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_level_batches_batch_id ON level_batches (batch_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_conversation_participants_user_id ON conversation_participants (user_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_community_post_likes_user_id ON community_post_likes (user_id)`,
+		} {
+			if err := db.Exec(stmt).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
 	log.Println("[MIGRATION] Database migrations completed successfully")
 	return nil
 }

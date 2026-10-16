@@ -18,6 +18,7 @@ import (
 	"context"
 	"log"
 	netHTTP "net/http"
+	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -130,21 +131,34 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		authGroup.POST("/change-password", middleware.JWTMiddleware(jwtManager, db), authHandler.ChangePassword)
 	}
 
-	// Public Proxy Route for local/emulator R2 image proxying
+	// Public R2 image proxy, used by the Flutter app on web (the bucket has no
+	// CORS policy) and on local emulators (api_endpoints.dart). Only fetches
+	// from our own R2_PUBLIC_URL host — an open fetch-any-URL endpoint would be
+	// a free proxy and an SSRF hole into the server's internal network.
+	r2Host := ""
+	if u, err := url.Parse(cfg.R2PublicURL); err == nil {
+		r2Host = u.Host
+	}
+	proxyClient := &netHTTP.Client{
+		Timeout: 30 * time.Second,
+		// A redirect could point anywhere; the bucket never issues one.
+		CheckRedirect: func(*netHTTP.Request, []*netHTTP.Request) error { return netHTTP.ErrUseLastResponse },
+	}
 	v1.GET("/proxy", func(c *gin.Context) {
-		targetURL := c.Query("url")
-		if targetURL == "" {
-			c.JSON(netHTTP.StatusBadRequest, gin.H{"error": "url is required"})
+		target, err := url.Parse(c.Query("url"))
+		if err != nil || r2Host == "" || target.Host != r2Host || (target.Scheme != "https" && target.Scheme != "http") {
+			c.JSON(netHTTP.StatusBadRequest, gin.H{"error": "url must point at the storage bucket"})
 			return
 		}
 
-		resp, err := netHTTP.Get(targetURL)
+		resp, err := proxyClient.Get(target.String())
 		if err != nil {
-			c.JSON(netHTTP.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(netHTTP.StatusBadGateway, gin.H{"error": "failed to fetch file"})
 			return
 		}
 		defer resp.Body.Close()
 
+		c.Header("Cache-Control", "public, max-age=86400")
 		c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
 	})
 
@@ -446,6 +460,17 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		rewardGroup.GET("/transactions", rewardHandler.GetTransactions)
 	}
 	v1.GET("/rewards/cost/:resourceId", guard.Require(middleware.AuthJWT), rewardHandler.GetCost)
+
+	// Referral: invite codes shown on the member card. Rewards are paid from
+	// the verification paths, not here.
+	referralHandler := handler.NewReferralHandler(db)
+	referralGroup := v1.Group("/my/referral")
+	referralGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		referralGroup.GET("", referralHandler.GetMine)
+		referralGroup.POST("/apply", referralHandler.Apply)
+	}
+	v1.GET("/referrals/stats", guard.Require(middleware.AdminJWT), referralHandler.AdminStats)
 
 	// Club: dedicated repo/handler (not generic CRUD) because of the
 	// denormalized follower count and JWT-scoped follow/suggest actions.

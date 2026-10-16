@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"campusassistant-api/internal/domain"
+	"campusassistant-api/internal/repository/postgres"
 	"campusassistant-api/internal/service"
 	"campusassistant-api/pkg/telegram"
 
@@ -373,6 +374,9 @@ func (h *StudentVerificationHandler) Approve(c *gin.Context) {
 			"department_id": v.DepartmentID,
 			"role":          domain.RoleStudent,
 		}).Error; err != nil {
+			return err
+		}
+		if err := postgres.GrantReferralReward(tx, v.UserID); err != nil {
 			return err
 		}
 

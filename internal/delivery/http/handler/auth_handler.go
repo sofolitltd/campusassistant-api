@@ -36,17 +36,20 @@ func NewAuthHandler(db *gorm.DB, jwtManager *auth.JWTManager, accessTokenExpiry 
 
 // RegisterRequest represents a user registration request
 type RegisterRequest struct {
-	Email        string     `json:"email" binding:"required,email"`
-	Password     string     `json:"password" binding:"required,min=8"`
-	FirstName    string     `json:"first_name" binding:"required"`
-	LastName     string     `json:"last_name" binding:"required"`
-	Phone        string     `json:"phone"`
-	Gender       string     `json:"gender"`
+	Email     string `json:"email" binding:"required,email"`
+	Password  string `json:"password" binding:"required,min=8"`
+	FirstName string `json:"first_name" binding:"required"`
+	LastName  string `json:"last_name" binding:"required"`
+	Phone     string `json:"phone"`
+	Gender    string `json:"gender"`
 	// Role is ignored: self-signup always creates a student. Teacher/staff
 	// roles are granted by claiming a profile, admin roles never via signup.
 	Role         string     `json:"role"`
 	UniversityID *uuid.UUID `json:"university_id"`
 	DepartmentID *uuid.UUID `json:"department_id"`
+	// ReferralCode is optional; the reward is paid when the account is
+	// verified, not at signup (see domain/referral.go).
+	ReferralCode string `json:"referral_code"`
 }
 
 // LoginRequest represents a login request
@@ -93,6 +96,16 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
+	var referredBy *uuid.UUID
+	if strings.TrimSpace(req.ReferralCode) != "" {
+		referrerID, err := postgres.FindReferrerByCode(c.Request.Context(), h.db, req.ReferralCode)
+		if err != nil {
+			c.JSON(referralErrorStatus(err), gin.H{"error": referralErrorMessage(err)})
+			return
+		}
+		referredBy = &referrerID
+	}
+
 	// Hash password
 	hashedPassword, err := auth.HashPassword(req.Password)
 	if err != nil {
@@ -113,6 +126,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		DepartmentID: req.DepartmentID,
 		IsActive:     true,
 		IsVerified:   false,
+		ReferredByID: referredBy,
 	}
 
 	if err := h.db.Create(&user).Error; err != nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	netHTTP "net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -292,5 +293,21 @@ func TestRouter_RegisterIgnoresRequestedRole(t *testing.T) {
 	e.db(t).First(&user, "email = ?", "new@test.dev")
 	if user.Role != domain.RoleStudent {
 		t.Fatalf("registered role = %q, want student", user.Role)
+	}
+}
+
+func TestRouter_ProxyOnlyFetchesFromStorageBucket(t *testing.T) {
+	e := newRouterEnv(t) // no R2_PUBLIC_URL configured → nothing is allowed
+	for _, target := range []string{
+		"http://169.254.169.254/latest/meta-data/", // cloud metadata
+		"http://localhost:8000/",                   // Coolify dashboard
+		"https://example.com/",
+		"file:///etc/passwd",
+		"",
+	} {
+		w := e.call("GET", "/api/v1/proxy?url="+url.QueryEscape(target), "")
+		if w.Code != netHTTP.StatusBadRequest {
+			t.Errorf("proxy %q: got %d, want 400", target, w.Code)
+		}
 	}
 }

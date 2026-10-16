@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"campusassistant-api/internal/domain"
+	"campusassistant-api/internal/repository/postgres"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -89,6 +90,9 @@ func claimProfile(
 			userUpdates["department_id"] = deptID
 		}
 		if err := tx.Model(&domain.User{}).Where("id = ?", userID).Updates(userUpdates).Error; err != nil {
+			return err
+		}
+		if err := postgres.GrantReferralReward(tx, userID); err != nil {
 			return err
 		}
 		return tx.First(profile).Error
