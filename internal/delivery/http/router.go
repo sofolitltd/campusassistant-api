@@ -52,10 +52,12 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	r.Use(middleware.SystemLogger(db, telegramClient))
 	r.Use(gin.Recovery())
 	corsOrigins := config.SplitList(cfg.CORSAllowedOrigins)
-	// Built-in origins for the hosted Flutter web app (Firebase Hosting serves both domains).
+	// Built-in origins for the hosted Flutter web app (Firebase Hosting site
+	// "campusassistant" serves both domains). The project's default site,
+	// campusassistantbd.web.app, is disabled and no longer an origin.
 	corsOrigins = append(corsOrigins,
-		"https://campusassistantbd.web.app",
-		"https://campusassistantbd.firebaseapp.com",
+		"https://campusassistant.web.app",
+		"https://campusassistant.firebaseapp.com",
 	)
 	if o := middleware.NormalizeOrigin(cfg.BkashCallbackBaseURL); o != "" {
 		corsOrigins = append(corsOrigins, o) // the Flutter web app that bKash redirects back to
