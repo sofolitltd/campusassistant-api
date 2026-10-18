@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"campusassistant-api/internal/domain"
+	"campusassistant-api/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -46,9 +47,9 @@ func (h *RewardHandler) GetBalance(c *gin.Context) {
 
 const (
 	adRewardDescription = "Earned by watching ad"
-	adRewardAmount      = 2
+	adRewardAmount      = 1
 	adRewardCooldown    = 30 * time.Second
-	adRewardDailyLimit  = 4
+	adRewardDailyLimit  = 5
 )
 
 type EarnResponse struct {
@@ -226,6 +227,9 @@ type SpendResponse struct {
 	Spent      int  `json:"spent"`
 	Balance    int  `json:"balance"`
 	IsPro      bool `json:"is_pro"`
+	// Free is true when an access grant (launch offer etc.) covers the
+	// download, so no coins were spent.
+	Free bool `json:"free,omitempty"`
 }
 
 // POST /rewards/spend/:resourceId
@@ -245,6 +249,12 @@ func (h *RewardHandler) Spend(c *gin.Context) {
 
 	if user.IsPro {
 		c.JSON(http.StatusOK, SpendResponse{Spent: 0, Balance: 0, IsPro: true})
+		return
+	}
+
+	if perks, err := service.ResolveGrantPerks(h.db.WithContext(c.Request.Context()), userID, time.Now()); err == nil && perks.CoinFree {
+		// Spent: 0 (not null) already reads as "granted" to older app builds.
+		c.JSON(http.StatusOK, SpendResponse{Spent: 0, Free: true})
 		return
 	}
 

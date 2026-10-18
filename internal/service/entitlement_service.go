@@ -96,6 +96,22 @@ func (s *EntitlementService) resolve(ctx context.Context, userID uuid.UUID) (*do
 		}
 	}
 
+	// Access grants (launch offers etc.) switch individual features on,
+	// unlimited, for non-Pro users too.
+	perks, err := ResolveGrantPerks(db, userID, now)
+	if err != nil {
+		return nil, nil, err
+	}
+	unlimited := func(f string) {
+		grants[f] = domain.PlanEntitlement{Feature: f, Limit: domain.LimitUnlimited, Period: domain.PeriodNone}
+	}
+	if perks.AdFree {
+		unlimited(domain.FeatureAdFree)
+	}
+	if perks.CoinFree {
+		unlimited(domain.FeatureUnlimitedDownloads)
+	}
+
 	// Every known feature appears in the response, denied unless granted.
 	known := map[string]bool{}
 	for _, f := range domain.DefaultProFeatures {

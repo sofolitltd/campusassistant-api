@@ -3,11 +3,13 @@ package handler
 import (
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/repository/postgres"
+	"campusassistant-api/internal/service"
 	"campusassistant-api/pkg/auth"
 	"campusassistant-api/pkg/mailer"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -546,6 +548,10 @@ func (h *AuthHandler) loadFullUser(userID any) (domain.User, error) {
 	}
 	user.ComputeSubscriptionStatus()
 	h.markCR(&user)
+	// Best-effort: a perks lookup failure must not break login or /me.
+	if perks, err := service.ResolveGrantPerks(h.db, user.ID, time.Now()); err == nil {
+		user.Perks = perks
+	}
 
 	// Fallback to Student/Teacher/Staff-level university/department if
 	// User-level not set.

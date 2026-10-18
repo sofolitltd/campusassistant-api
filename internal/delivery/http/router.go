@@ -901,6 +901,20 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		couponGroup.PUT("/:id", couponHandler.Update)
 	}
 
+	// Access grants (admin): time-boxed ad-free / coin-free perks for a
+	// university, department, batch, user or everyone — see
+	// service.ResolveGrantPerks for how they apply.
+	accessGrantHandler := handler.NewAccessGrantHandler(db)
+	accessGrantGroup := v1.Group("/access-grants")
+	accessGrantGroup.Use(middleware.JWTMiddleware(jwtManager, db), middleware.RequireAdmin())
+	{
+		accessGrantGroup.GET("", accessGrantHandler.List)
+		accessGrantGroup.POST("", accessGrantHandler.Create)
+		accessGrantGroup.PUT("/:id", accessGrantHandler.Update)
+		accessGrantGroup.POST("/:id/end", accessGrantHandler.End)
+		accessGrantGroup.DELETE("/:id", accessGrantHandler.Delete)
+	}
+
 	// Feedback Routes
 	feedbackRepo := postgres.NewFeedbackRepository(db)
 	feedbackHandler := handler.NewFeedbackHandler(feedbackRepo)

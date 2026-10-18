@@ -56,7 +56,7 @@ func newRouterEnv(t *testing.T) *routerEnv {
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { sqlDB.Close() })
 	if err := db.AutoMigrate(&domain.User{}, &domain.Admin{}, &domain.Journal{}, &domain.LedgerEntry{},
-		&domain.SubscriptionPlan{}, &domain.SubscriptionTarget{}, &domain.UserSubscription{}, &domain.PlanEntitlement{}, &domain.UsageCounter{}); err != nil {
+		&domain.SubscriptionPlan{}, &domain.SubscriptionTarget{}, &domain.UserSubscription{}, &domain.PlanEntitlement{}, &domain.UsageCounter{}, &domain.Student{}, &domain.AccessGrant{}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -54,6 +54,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 		&domain.Journal{}, &domain.LedgerEntry{}, &domain.Invoice{}, &domain.InvoiceLine{}, &domain.InvoiceCounter{},
 		&domain.MerchantPayout{}, &domain.Refund{}, &domain.PlanEntitlement{}, &domain.UsageCounter{}, &domain.OrderEvent{}, &domain.NotificationMute{},
 		&domain.Product{}, &domain.ProductTarget{}, &domain.MarketplaceCategory{}, &domain.ProductReview{}, &domain.WishlistItem{}, &domain.CommissionPolicy{},
+		&domain.Student{}, &domain.AccessGrant{},
 	)
 	if err != nil {
 		t.Fatalf("migrate: %v", err)

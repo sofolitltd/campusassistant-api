@@ -165,6 +165,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.SubscriptionPlan{},
 		&domain.SubscriptionTarget{},
 		&domain.UserSubscription{},
+		&domain.AccessGrant{},
 		&domain.BkashTransaction{},
 		&domain.Journal{},
 		&domain.LedgerEntry{},

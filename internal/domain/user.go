@@ -75,6 +75,10 @@ type User struct {
 	// DB column; the Flutter client reads it to show CR-only actions.
 	IsCR bool `gorm:"-" json:"is_cr"`
 
+	// Perks from admin access grants (launch offers, ambassadors, …). Not a
+	// DB column; resolved in loadFullUser so the app can hide ads/coin costs.
+	Perks *GrantPerks `gorm:"-" json:"perks,omitempty"`
+
 	// Academic/Professional Profiles (Preloadable)
 	Student *Student `gorm:"foreignKey:UserID" json:"student,omitempty"`
 	Teacher *Teacher `gorm:"foreignKey:UserID" json:"teacher,omitempty"`
