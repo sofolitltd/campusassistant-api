@@ -46,8 +46,9 @@ func (h *RewardHandler) GetBalance(c *gin.Context) {
 
 const (
 	adRewardDescription = "Earned by watching ad"
+	adRewardAmount      = 2
 	adRewardCooldown    = 30 * time.Second
-	adRewardDailyLimit  = 5
+	adRewardDailyLimit  = 4
 )
 
 type EarnResponse struct {
@@ -88,8 +89,8 @@ func (h *RewardHandler) Earn(c *gin.Context) {
 		return
 	}
 
-	reward.Balance++
-	reward.LifetimeEarned++
+	reward.Balance += adRewardAmount
+	reward.LifetimeEarned += adRewardAmount
 
 	if err := h.rewardRepo.UpdateBalance(c.Request.Context(), reward); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update balance"})
@@ -99,7 +100,7 @@ func (h *RewardHandler) Earn(c *gin.Context) {
 	txn := &domain.RewardTransaction{
 		UserID:       userID,
 		Type:         domain.RewardEarn,
-		Amount:       1,
+		Amount:       adRewardAmount,
 		BalanceAfter: reward.Balance,
 		Description:  adRewardDescription,
 	}
@@ -112,7 +113,7 @@ func (h *RewardHandler) Earn(c *gin.Context) {
 		Balance:        reward.Balance,
 		LifetimeEarned: reward.LifetimeEarned,
 		LifetimeSpent:  reward.LifetimeSpent,
-		Earned:         1,
+		Earned:         adRewardAmount,
 	})
 }
 
