@@ -140,6 +140,13 @@ func (h *ResourceHandler) Delete(c *gin.Context) {
 			return
 		}
 
+		// Delete the row first: if that fails the files must still exist,
+		// otherwise the resource is left pointing at missing files.
+		if err := h.Usecase.HardDelete(c.Request.Context(), id); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
 		if h.storage != nil {
 			if resource.FileURL != "" {
 				if err := h.storage.DeleteFile(c.Request.Context(), resource.FileURL); err != nil {
@@ -151,11 +158,6 @@ func (h *ResourceHandler) Delete(c *gin.Context) {
 					c.Error(err)
 				}
 			}
-		}
-
-		if err := h.Usecase.HardDelete(c.Request.Context(), id); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "Permanently deleted"})

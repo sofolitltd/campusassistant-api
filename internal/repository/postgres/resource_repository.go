@@ -106,6 +106,21 @@ func (r *resourceRepository) Update(ctx context.Context, entity *domain.Resource
 	return nil
 }
 
+// HardDelete removes the resource with its batch links and ratings. The
+// generic delete fails on the resource_batches foreign key for any resource
+// that was assigned to a batch.
+func (r *resourceRepository) HardDelete(ctx context.Context, id uuid.UUID) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM resource_batches WHERE resource_id = ?", id).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("resource_id = ?", id).Delete(&domain.ResourceRating{}).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Delete(&domain.Resource{}, "id = ?", id).Error
+	})
+}
+
 func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]interface{}, limit, offset int) ([]domain.Resource, int64, error) {
 	var entities []domain.Resource
 	var count int64
