@@ -63,7 +63,10 @@ func (r *communityRepository) GetPostByID(ctx context.Context, id uuid.UUID) (*d
 
 func (r *communityRepository) DeletePost(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("post_id = ?", id).Delete(&domain.CommunityComment{}).Error; err != nil {
+		// Hard delete: soft-deleted comments keep their rows, which still
+		// reference the post and block its hard delete below. One statement
+		// removes replies together with their parents.
+		if err := tx.Unscoped().Where("post_id = ?", id).Delete(&domain.CommunityComment{}).Error; err != nil {
 			return err
 		}
 		return tx.Unscoped().Delete(&domain.CommunityPost{}, "id = ?", id).Error
