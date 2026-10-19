@@ -2,6 +2,9 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 
 	"campusassistant-api/internal/domain"
 
@@ -106,6 +109,21 @@ func (r *resourceRepository) Update(ctx context.Context, entity *domain.Resource
 	return nil
 }
 
+// HardDelete removes the resource with its batch links and ratings. The
+// generic delete fails on the resource_batches foreign key for any resource
+// that was assigned to a batch.
+func (r *resourceRepository) HardDelete(ctx context.Context, id uuid.UUID) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM resource_batches WHERE resource_id = ?", id).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("resource_id = ?", id).Delete(&domain.ResourceRating{}).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Delete(&domain.Resource{}, "id = ?", id).Error
+	})
+}
+
 func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]interface{}, limit, offset int) ([]domain.Resource, int64, error) {
 	var entities []domain.Resource
 	var count int64
@@ -158,9 +176,18 @@ func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]inter
 					searchVal, searchVal, searchVal)
 			}
 		case "year":
-			// Search for specific year in the JSONB array (e.g. "2024")
-			yearVal := "[\"" + value.(string) + "\"]"
-			db = db.Where("resources.years @> ?", yearVal)
+			// The admin panel stores a question's year as metadata.year; older
+			// rows use the years array, as strings or numbers.
+			year, err := strconv.Atoi(strings.TrimSpace(value.(string)))
+			if err != nil {
+				db = db.Where("1 = 0")
+				continue
+			}
+			db = db.Where("(resources.years @> ? OR resources.years @> ? OR resources.metadata->>'year' = ?)",
+				fmt.Sprintf(`["%d"]`, year), fmt.Sprintf(`[%d]`, year), strconv.Itoa(year))
+		case "level_id":
+			// Resources have no level of their own; match through their course.
+			db = db.Where("resources.course_code IN (SELECT courses.course_code FROM courses WHERE courses.level_id = ? AND courses.deleted_at IS NULL)", value)
 		case "tags":
 			// Filter by a single tag string
 			db = db.Where("? = ANY(resources.tags)", value)
