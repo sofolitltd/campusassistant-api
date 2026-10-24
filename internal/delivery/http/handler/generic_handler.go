@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -185,7 +186,7 @@ func (h *GenericHandler[T]) Delete(c *gin.Context) {
 
 	if c.Query("permanent") == "true" {
 		if err := h.Usecase.HardDelete(c.Request.Context(), id); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(deleteErrorStatus(err), gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "Deleted permanently"})
@@ -193,11 +194,20 @@ func (h *GenericHandler[T]) Delete(c *gin.Context) {
 	}
 
 	if err := h.Usecase.Delete(c.Request.Context(), id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(deleteErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted successfully"})
+}
+
+// deleteErrorStatus answers 409 when a repository refused the delete because
+// other records still depend on the row (domain.ErrInUse).
+func deleteErrorStatus(err error) int {
+	if errors.Is(err, domain.ErrInUse) {
+		return http.StatusConflict
+	}
+	return http.StatusInternalServerError
 }
 
 func (h *GenericHandler[T]) HardDelete(c *gin.Context) {

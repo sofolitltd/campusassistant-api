@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type resourceRepository struct {
@@ -90,7 +91,9 @@ func (r *resourceRepository) Update(ctx context.Context, entity *domain.Resource
 	entity.BatchIDs = nil
 	entity.Batches = nil
 
-	if err := r.db.WithContext(ctx).Save(entity).Error; err != nil {
+	// Omit associations: Creator is filled on read, and saving it upserts the
+	// user row with created_by_id overwritten by this resource's ID.
+	if err := r.db.WithContext(ctx).Omit(clause.Associations).Save(entity).Error; err != nil {
 		return err
 	}
 
