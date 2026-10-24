@@ -3,8 +3,11 @@ package postgres
 import (
 	"campusassistant-api/internal/domain"
 	"context"
+	"fmt"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type levelRepository struct {
@@ -17,6 +20,59 @@ func NewLevelRepository(db *gorm.DB) domain.Repository[domain.Level] {
 		Repository: NewGormRepository[domain.Level](db),
 		db:         db,
 	}
+}
+
+// Delete and HardDelete refuse while live courses still point at the level:
+// a deleted level hides its courses from the admin (they're reached through
+// the level and aren't "without level" either), so they must be moved first.
+func (r *levelRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	if err := r.ensureNoCourses(ctx, id); err != nil {
+		return err
+	}
+	return r.Repository.Delete(ctx, id)
+}
+
+func (r *levelRepository) HardDelete(ctx context.Context, id uuid.UUID) error {
+	if err := r.ensureNoCourses(ctx, id); err != nil {
+		return err
+	}
+	return r.Repository.HardDelete(ctx, id)
+}
+
+func (r *levelRepository) ensureNoCourses(ctx context.Context, id uuid.UUID) error {
+	var n int64
+	if err := r.db.WithContext(ctx).Model(&domain.Course{}).Where("level_id = ?", id).Count(&n).Error; err != nil {
+		return err
+	}
+	if n > 0 {
+		return fmt.Errorf("%w: this level has %d course(s) — move them to another level or delete them first", domain.ErrInUse, n)
+	}
+	return nil
+}
+
+// Update replaces the level's batches with BatchIDs when they are sent. The
+// generic Save (via Level.BeforeSave) only ever adds join rows, so unticking a
+// batch in the admin never removed it. nil BatchIDs leaves batches untouched.
+func (r *levelRepository) Update(ctx context.Context, entity *domain.Level) error {
+	batchIDs := entity.BatchIDs
+	entity.BatchIDs = nil
+	entity.Batches = nil
+
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Omit(clause.Associations).Save(entity).Error; err != nil {
+			return err
+		}
+		if batchIDs == nil {
+			return nil
+		}
+		var batches []domain.Batch
+		if len(batchIDs) > 0 {
+			if err := tx.Where("id IN ?", batchIDs).Find(&batches).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(entity).Association("Batches").Replace(batches)
+	})
 }
 
 func (r *levelRepository) GetAll(ctx context.Context, filter map[string]interface{}, limit, offset int) ([]domain.Level, int64, error) {
