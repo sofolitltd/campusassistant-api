@@ -63,4 +63,11 @@ type SubscriptionRepository interface {
 
 	GetAllSubscriptions(ctx context.Context, offset, limit int) ([]UserSubscription, int64, float64, error)
 	ExpireSubscriptions(ctx context.Context) (int64, error)
+
+	// AdminSetExpiry extends or shortens a user's current subscription by
+	// overwriting its EndDate directly (nil = lifetime/never expires), and
+	// keeps User.IsPro/ProExpiry in sync with it. Support escalations when
+	// a user's access should last longer or shorter than their plan's
+	// default duration gives them.
+	AdminSetExpiry(ctx context.Context, userID uuid.UUID, endDate *time.Time) (*UserSubscription, error)
 }

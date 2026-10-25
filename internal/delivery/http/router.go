@@ -247,6 +247,11 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		myUserGroup.PUT("", userHandler.UpdateMyUser)
 	}
 
+	// Admin-triggered password reset — covers support cases where the
+	// self-service email code (password_reset_handler.go) never reaches the
+	// user, letting an admin set a new password directly instead.
+	v1.PUT("/users/:id/password", guard.Require(middleware.AdminJWT), userHandler.AdminResetPassword)
+
 	myStudentGroup := v1.Group("/my/student")
 	myStudentGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
@@ -838,6 +843,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		subGroup.GET("", middleware.RequireAdmin(), subHandler.GetAllSubscriptions)
 		subGroup.POST("", middleware.RequireAdmin(), subHandler.CreateSubscription)
 		subGroup.POST("/admin-grant", middleware.RequireAdmin(), subHandler.AdminGrantPro)
+		subGroup.PUT("/user/:uid/expiry", middleware.RequireAdmin(), subHandler.AdminSetExpiry)
 
 		planGroup := v1.Group("/subscription-plans")
 		{

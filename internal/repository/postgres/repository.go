@@ -122,6 +122,17 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 				} else {
 					db = db.Where("NOT " + activePro)
 				}
+			} else if isUser && key == "plan_status" {
+				// Splits the old is_pro=false bucket into "basic" (never/no-longer
+				// subscribed) vs "expired" (is_pro flag not yet swept but lapsed).
+				switch value.(string) {
+				case "pro":
+					db = db.Where("users.is_pro = true AND (users.pro_expiry IS NULL OR users.pro_expiry > NOW())")
+				case "expired":
+					db = db.Where("users.is_pro = true AND users.pro_expiry IS NOT NULL AND users.pro_expiry <= NOW()")
+				case "basic":
+					db = db.Where("users.is_pro = false")
+				}
 			} else if (isBanner || isContact) && (key == "university_id" || key == "department_id") {
 				// Join with targets for specialized filtering
 				targetTable := "banner_targets"

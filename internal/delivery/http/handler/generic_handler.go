@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/usecase"
@@ -38,6 +39,10 @@ func (h *GenericHandler[T]) Create(c *gin.Context) {
 	}
 
 	if err := h.Usecase.Create(c.Request.Context(), &entity); err != nil {
+		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
+			c.JSON(http.StatusConflict, gin.H{"error": "A record with this value already exists."})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -87,7 +92,7 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 	}
 
 	// Add string filters
-	stringFilters := []string{"course_year", "course_category", "course_code", "name", "slug", "mode", "type", "club_type", "status", "batch", "year", "blood_group", "scope", "category", "target_scope", "role", "gender"}
+	stringFilters := []string{"course_year", "course_category", "course_code", "name", "slug", "mode", "type", "club_type", "status", "batch", "year", "blood_group", "scope", "category", "target_scope", "role", "gender", "plan_status"}
 	for _, f := range stringFilters {
 		if val := c.Query(f); val != "" {
 			filter[f] = val
@@ -168,6 +173,10 @@ func (h *GenericHandler[T]) Update(c *gin.Context) {
 	}
 
 	if err := h.Usecase.Update(c.Request.Context(), existing); err != nil {
+		if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
+			c.JSON(http.StatusConflict, gin.H{"error": "A record with this value already exists."})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

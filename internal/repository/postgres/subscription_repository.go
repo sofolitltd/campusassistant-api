@@ -142,3 +142,30 @@ func (r *subscriptionRepository) ExpireSubscriptions(ctx context.Context) (int64
 		
 	return result.RowsAffected, result.Error
 }
+
+func (r *subscriptionRepository) AdminSetExpiry(ctx context.Context, userID uuid.UUID, endDate *time.Time) (*domain.UserSubscription, error) {
+	now := time.Now()
+	isPro := endDate == nil || endDate.After(now)
+
+	var sub domain.UserSubscription
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Most recent row is the one GetUserSubscription treats as "the"
+		// subscription — keep both reads consistent with each other.
+		if err := tx.Where("user_id = ?", userID).Order("created_at desc").First(&sub).Error; err != nil {
+			return err
+		}
+		sub.EndDate = endDate
+		if err := tx.Model(&domain.UserSubscription{}).Where("id = ?", sub.ID).
+			Update("end_date", endDate).Error; err != nil {
+			return err
+		}
+		return tx.Model(&domain.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+			"is_pro":     isPro,
+			"pro_expiry": endDate,
+		}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &sub, nil
+}

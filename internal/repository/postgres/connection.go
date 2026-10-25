@@ -332,6 +332,42 @@ func RunMigrations(db *gorm.DB) error {
 		return nil
 	})
 
+	// sessions/batches had no uniqueness guard on (department_id, slug), so
+	// repeated bulk uploads (e.g. the migration scripts) created exact
+	// duplicates. Dedupe existing rows (keep the oldest, soft-delete the
+	// rest) then add a partial unique index — partial so a soft-deleted
+	// slug doesn't block recreating it — to stop it recurring from any
+	// entry point (admin UI, migration scripts, future API callers).
+	once(db, "dedupe_and_unique_session_batch_slugs", func() error {
+		return db.Transaction(func(tx *gorm.DB) error {
+			for _, stmt := range []string{
+				`WITH ranked AS (
+					SELECT id, ROW_NUMBER() OVER (
+						PARTITION BY department_id, slug ORDER BY created_at ASC, id ASC
+					) AS rn
+					FROM sessions WHERE deleted_at IS NULL
+				)
+				UPDATE sessions SET deleted_at = NOW()
+				WHERE id IN (SELECT id FROM ranked WHERE rn > 1)`,
+				`WITH ranked AS (
+					SELECT id, ROW_NUMBER() OVER (
+						PARTITION BY department_id, slug ORDER BY created_at ASC, id ASC
+					) AS rn
+					FROM batches WHERE deleted_at IS NULL
+				)
+				UPDATE batches SET deleted_at = NOW()
+				WHERE id IN (SELECT id FROM ranked WHERE rn > 1)`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_dept_slug_active ON sessions (department_id, slug) WHERE deleted_at IS NULL`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS idx_batches_dept_slug_active ON batches (department_id, slug) WHERE deleted_at IS NULL`,
+			} {
+				if err := tx.Exec(stmt).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	})
+
 	log.Println("[MIGRATION] Database migrations completed successfully")
 	return nil
 }

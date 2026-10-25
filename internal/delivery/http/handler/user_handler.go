@@ -5,6 +5,7 @@ import (
 
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/usecase"
+	"campusassistant-api/pkg/auth"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -61,4 +62,48 @@ func (h *UserHandler) UpdateMyUser(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, user)
+}
+
+// AdminResetPassword lets an admin set a user's password directly.
+// PUT /users/:id/password (AdminJWT only)
+//
+// Exists for support cases where the self-service email code in
+// password_reset_handler.go never reaches the user (spam filtering, a dead
+// inbox, etc). Bumping TokenVersion mirrors ResetPassword: a reset — admin-
+// issued or not — should invalidate whatever sessions were already issued.
+func (h *UserHandler) AdminResetPassword(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	user, err := h.usecase.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	var req struct {
+		Password string `json:"password" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	user.PasswordHash = hash
+	user.TokenVersion++
+	if err := h.usecase.Update(c.Request.Context(), user); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reset password"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Password reset successfully"})
 }
