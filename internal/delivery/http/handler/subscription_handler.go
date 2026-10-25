@@ -4,12 +4,14 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type SubscriptionHandler struct {
@@ -80,6 +82,42 @@ func (h *SubscriptionHandler) GetUserSubscription(c *gin.Context) {
 	sub, err := h.repo.GetUserSubscription(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(http.StatusOK, nil) // Return null if no subscription found
+		return
+	}
+
+	c.JSON(http.StatusOK, sub)
+}
+
+type adminSetExpiryRequest struct {
+	// EndDate is an RFC3339 timestamp, or omitted/null for "never expires".
+	EndDate *time.Time `json:"end_date"`
+}
+
+// AdminSetExpiry extends or shortens a user's current subscription — for
+// support cases where someone's access needs adjusting outside the plan's
+// normal duration (e.g. compensating for a billing issue). It overwrites
+// the existing subscription row's EndDate rather than creating a new one,
+// and keeps User.IsPro/ProExpiry in sync. Admin-only.
+func (h *SubscriptionHandler) AdminSetExpiry(c *gin.Context) {
+	userID, err := uuid.Parse(c.Param("uid"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	var req adminSetExpiryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	sub, err := h.repo.AdminSetExpiry(c.Request.Context(), userID, req.EndDate)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "This user has no subscription to adjust"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update subscription"})
 		return
 	}
 
