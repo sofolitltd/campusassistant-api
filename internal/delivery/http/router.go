@@ -254,10 +254,21 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// user, letting an admin set a new password directly instead.
 	v1.PUT("/users/:id/password", guard.Require(middleware.AdminJWT), userHandler.AdminResetPassword)
 
+	// Admin view into the self-service forgot-password flow, plus the
+	// fresh-code issuance for users whose code email never landed (see
+	// password_reset_admin_handler.go).
+	resetAdminHandler := handler.NewPasswordResetAdminHandler(db)
+	resetAdminGroup := v1.Group("/admin/password-resets")
+	{
+		resetAdminGroup.GET("", guard.Require(middleware.AdminJWT), resetAdminHandler.List)
+		resetAdminGroup.POST("/issue", guard.Require(middleware.AdminJWT), resetAdminHandler.IssueCode)
+	}
+
 	// Admin broadcast mail — free-form email to an explicit list of student
 	// profiles, capped per call (see admin_mail_handler.go).
 	adminMailHandler := handler.NewAdminMailHandler(db, mail)
 	v1.POST("/admin/mail", guard.Require(middleware.AdminJWT), adminMailHandler.Send)
+	v1.GET("/admin/mail/logs", guard.Require(middleware.AdminJWT), adminMailHandler.List)
 
 	myStudentGroup := v1.Group("/my/student")
 	myStudentGroup.Use(middleware.JWTMiddleware(jwtManager, db))

@@ -6,6 +6,7 @@ import (
 	"campusassistant-api/pkg/mailer"
 	"net/http"
 	"net/mail"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -101,6 +102,13 @@ func (h *AdminMailHandler) Send(c *gin.Context) {
 		skips []skipped
 	)
 
+	var senderID *uuid.UUID
+	if raw, ok := c.Get("user_id"); ok {
+		if u, ok := raw.(uuid.UUID); ok {
+			senderID = &u
+		}
+	}
+
 	for _, st := range students {
 		email := strings.TrimSpace(st.Email)
 		if _, err := mail.ParseAddress(email); err != nil {
@@ -113,9 +121,16 @@ func (h *AdminMailHandler) Send(c *gin.Context) {
 		}
 		if err := h.mail.Send(email, req.Subject, htmlBody, textBody); err != nil {
 			logger.Errorf("Admin mail: failed to email %s: %v", email, err)
-			skips = append(skips, skipped{st.ID, "send failed"})
+			// Surface the raw SMTP reason to the dashboard, not just
+			// "send failed" — Gmail's 535/421/timeout lines are what
+			// actually tells an admin why mail is dead.
+			skips = append(skips, skipped{st.ID, "send failed: " + err.Error()})
+			recordEmailLog(h.db, email, req.Subject, domain.EmailKindAdminBroadcast,
+				domain.EmailStatusFailed, err.Error(), senderID, &st.ID)
 			continue
 		}
+		recordEmailLog(h.db, email, req.Subject, domain.EmailKindAdminBroadcast,
+			domain.EmailStatusSent, "", senderID, &st.ID)
 		sent++
 	}
 
@@ -132,5 +147,58 @@ func (h *AdminMailHandler) Send(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"sent":    sent,
 		"skipped": skips,
+	})
+}
+
+// List returns the email history: one row per send attempt across every mail
+// flow, newest first. Admin dashboard's only way to answer "did we mail them
+// or not?" — nothing else persists this.
+// GET /admin/mail/logs (AdminJWT).
+//
+// Filters: kind (admin_broadcast|profile_claim), status (sent|failed),
+// email (ILIKE substring on recipient). Pagination: page, pageSize (≤100).
+func (h *AdminMailHandler) List(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	// Rebuilt per query because GORM Count/Find must each start from a fresh
+	// statement — reusing one chain after Count is a classic bug source.
+	build := func() *gorm.DB {
+		q := h.db.Model(&domain.EmailLog{})
+		if kind := c.Query("kind"); kind != "" {
+			q = q.Where("kind = ?", kind)
+		}
+		if status := c.Query("status"); status != "" {
+			q = q.Where("status = ?", status)
+		}
+		if email := strings.TrimSpace(c.Query("email")); email != "" {
+			q = q.Where("to ILIKE ?", "%"+email+"%")
+		}
+		return q
+	}
+
+	var total int64
+	if err := build().Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count email logs"})
+		return
+	}
+
+	var logs []domain.EmailLog
+	if err := build().Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load email logs"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"page":     page,
+		"pageSize": pageSize,
+		"total":    total,
+		"logs":     logs,
 	})
 }

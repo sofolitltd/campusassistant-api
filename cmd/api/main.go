@@ -98,10 +98,14 @@ func main() {
 					log.Printf("Background Worker: Cleaned up %d deleted message records.", count)
 				}
 
-				// Password reset rows are short-lived (10 min code, 15 min
-				// token). Anything a day old is spent — hard-delete it rather
-				// than accumulating consumed code hashes forever.
-				resetCutoff := time.Now().Add(-24 * time.Hour)
+				// Password reset rows' codes are short-lived (10 min code,
+				// 15 min token) — nothing here is live past that. But the
+				// rows ARE the admin panel's history of every "forgot
+				// password" request (GET /admin/password-resets), and the
+				// natural follow-up question — "when did you last request a
+				// code?" — needs more than a day of look-back. 7 days gives
+				// that without letting the table creep.
+				resetCutoff := time.Now().Add(-7 * 24 * time.Hour)
 				res := db.Unscoped().
 					Where("created_at < ?", resetCutoff).
 					Delete(&domain.PasswordReset{})

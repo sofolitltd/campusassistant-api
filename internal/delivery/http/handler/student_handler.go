@@ -98,10 +98,22 @@ func (h *StudentHandler) SendCodeEmail(c *gin.Context) {
 	}
 
 	htmlBody, textBody := mailer.ProfileClaimBodies(student.Name, student.VerificationCode)
+
+	var senderID *uuid.UUID
+	if raw, ok := c.Get("user_id"); ok {
+		if u, ok := raw.(uuid.UUID); ok {
+			senderID = &u
+		}
+	}
+
 	if err := h.mail.Send(email, mailer.ProfileClaimSubject, htmlBody, textBody); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send email"})
+		recordEmailLog(h.db, email, mailer.ProfileClaimSubject, domain.EmailKindProfileClaim,
+			domain.EmailStatusFailed, err.Error(), senderID, &student.ID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send email: " + err.Error()})
 		return
 	}
+	recordEmailLog(h.db, email, mailer.ProfileClaimSubject, domain.EmailKindProfileClaim,
+		domain.EmailStatusSent, "", senderID, &student.ID)
 
 	c.JSON(http.StatusOK, gin.H{"sent": true, "email": email})
 }
