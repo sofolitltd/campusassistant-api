@@ -10,6 +10,7 @@ import (
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/pkg/bkash"
 	"campusassistant-api/pkg/logger"
+	"campusassistant-api/pkg/telegram"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -35,8 +36,9 @@ type MarketplacePaymentService struct {
 	txRepo          domain.OrderTransactionRepository
 	bkashClient     BkashGateway
 	callbackBaseURL string
-	billing         *BillingService // optional; nil skips ledger + invoices
-	notifier        *OrderNotifier  // optional; nil skips order notifications
+	billing         *BillingService  // optional; nil skips ledger + invoices
+	notifier        *OrderNotifier   // optional; nil skips order notifications
+	telegram        *telegram.Client // optional; nil skips admin Telegram alerts
 }
 
 // SetOrderNotifier enables buyer/seller notifications when an order is paid.
@@ -49,6 +51,7 @@ func NewMarketplacePaymentService(
 	bkashClient BkashGateway,
 	callbackBaseURL string,
 	billing *BillingService,
+	telegramClient *telegram.Client,
 ) *MarketplacePaymentService {
 	return &MarketplacePaymentService{
 		db:              db,
@@ -57,6 +60,7 @@ func NewMarketplacePaymentService(
 		bkashClient:     bkashClient,
 		callbackBaseURL: callbackBaseURL,
 		billing:         billing,
+		telegram:        telegramClient,
 	}
 }
 
@@ -167,6 +171,8 @@ func (s *MarketplacePaymentService) fulfil(ctx context.Context, paymentID, trxID
 	// returning them from the closure would roll back the review flag itself.
 	var outcome error
 	var paidOrderID uuid.UUID
+	var buyer uuid.UUID
+	var charged int
 	err := s.db.WithContext(ctx).Transaction(func(db *gorm.DB) error {
 		var tx domain.OrderTransaction
 		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).First(&tx, "payment_id = ?", paymentID).Error; err != nil {
@@ -192,6 +198,7 @@ func (s *MarketplacePaymentService) fulfil(ctx context.Context, paymentID, trxID
 		if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).First(&order, "id = ?", tx.OrderID).Error; err != nil {
 			return ErrOrderNotFound
 		}
+		buyer, charged = order.BuyerID, tx.Amount
 		if order.Status != domain.OrderStatusPendingPayment {
 			// Paid, but the order moved on (cancelled by an admin while the
 			// buyer was at the bKash page). Don't resurrect it; a human
@@ -219,8 +226,34 @@ func (s *MarketplacePaymentService) fulfil(ctx context.Context, paymentID, trxID
 	}
 	if outcome == nil && paidOrderID != uuid.Nil {
 		s.notifier.OrderStatusChanged(ctx, paidOrderID, domain.OrderStatusPaid)
+		s.notifyOrderPaid(buyer, paidOrderID, charged, trxID)
 	}
 	return outcome
+}
+
+// notifyOrderPaid fires a best-effort Telegram admin alert after a paid
+// marketplace order commits. Best-effort: sent in the background, never
+// blocks or fails the fulfilment; a nil client (unconfigured) does nothing.
+func (s *MarketplacePaymentService) notifyOrderPaid(buyerID, orderID uuid.UUID, amount int, trxID string) {
+	if s.telegram == nil {
+		return
+	}
+	go func() {
+		email := ""
+		var u domain.User
+		if err := s.db.First(&u, "id = ?", buyerID).Error; err == nil {
+			email = u.Email
+		}
+		text := fmt.Sprintf(
+			"Marketplace order paid\nOrder ID: %s\nBuyer: %s\nAmount: %d BDT\nTrxID: %s",
+			orderID, email, amount, trxID,
+		)
+		tctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := s.telegram.SendMessage(tctx, text); err != nil {
+			logger.Errorf("[marketplace] telegram notify failed: %v", err)
+		}
+	}()
 }
 
 // markTerminal closes an initiated payment as failed/cancelled. Anything not

@@ -13,6 +13,7 @@ import (
 	"campusassistant-api/internal/service"
 	"campusassistant-api/pkg/bkash"
 	"campusassistant-api/pkg/logger"
+	"campusassistant-api/pkg/telegram"
 )
 
 func main() {
@@ -65,8 +66,12 @@ func main() {
 	// bKash client — it has to ask bKash about pending payments.
 	bkashClient := bkash.NewClient(cfg)
 	billingSvc := service.NewBillingService(db)
-	paymentSvc := service.NewPaymentService(db, subRepo, bkashTxRepo, couponRepo, bkashClient, cfg.BkashCallbackBaseURL, billingSvc)
-	marketplacePaymentSvc := service.NewMarketplacePaymentService(db, postgres.NewOrderRepository(db), postgres.NewOrderTransactionRepository(db), bkashClient, cfg.BkashCallbackBaseURL, billingSvc)
+	// Telegram admin alerts for payments the reconciler completes on its own
+	// (money received while nobody was at an execute endpoint). Degrades to
+	// logging when TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are unset.
+	tg := telegram.New(cfg)
+	paymentSvc := service.NewPaymentService(db, subRepo, bkashTxRepo, couponRepo, bkashClient, cfg.BkashCallbackBaseURL, billingSvc, tg)
+	marketplacePaymentSvc := service.NewMarketplacePaymentService(db, postgres.NewOrderRepository(db), postgres.NewOrderTransactionRepository(db), bkashClient, cfg.BkashCallbackBaseURL, billingSvc, tg)
 	orderSvc := service.NewOrderService(db, billingSvc, nil) // no notifier: abandoned checkouts don't need a "cancelled" ping
 	go runPaymentReconciler(paymentSvc, marketplacePaymentSvc, billingSvc, orderSvc)
 	go func() {

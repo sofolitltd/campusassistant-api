@@ -165,8 +165,8 @@ func newEnv(t *testing.T) *env {
 	return &env{
 		db: db, bkash: fb, billing: billing, orderRepo: orderRepo,
 		payments: NewPaymentService(db, postgres.NewSubscriptionRepository(db), postgres.NewBkashTransactionRepository(db),
-			postgres.NewCouponRepository(db), fb, "https://app.test", billing),
-		orders: NewMarketplacePaymentService(db, orderRepo, postgres.NewOrderTransactionRepository(db), fb, "https://app.test", billing),
+			postgres.NewCouponRepository(db), fb, "https://app.test", billing, nil),
+		orders: NewMarketplacePaymentService(db, orderRepo, postgres.NewOrderTransactionRepository(db), fb, "https://app.test", billing, nil),
 	}
 }
 

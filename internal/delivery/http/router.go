@@ -222,7 +222,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// Specialized Student Routes
 	studentRepo := postgres.NewGormRepositoryWithOrder[domain.Student](db, "weight ASC, LEFT(student_id, 2) DESC, student_id ASC")
 	studentUsecase := usecase.NewGenericUsecase(studentRepo)
-	studentHandler := handler.NewStudentHandler(studentUsecase, db)
+	studentHandler := handler.NewStudentHandler(studentUsecase, db, mail)
 	studentGroup := v1.Group("/students")
 	{
 		studentGroup.POST("", guard.Require(middleware.AdminJWT), studentHandler.Create)
@@ -230,6 +230,8 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		studentGroup.POST("/claim-profile", middleware.JWTMiddleware(jwtManager, db), studentHandler.ClaimProfile)
 		studentGroup.GET("", guard.Require(middleware.AuthJWT), studentHandler.GetAll)
 		studentGroup.GET("/:id", guard.Require(middleware.AuthJWT), studentHandler.GetByID)
+		studentGroup.POST("/:id/send-code-email", guard.Require(middleware.AdminJWT), studentHandler.SendCodeEmail)
+		studentGroup.POST("/:id/generate-code", guard.Require(middleware.AdminJWT), studentHandler.GenerateCode)
 		studentGroup.PUT("/:id", guard.Require(middleware.AdminJWT), studentHandler.Update)
 		studentGroup.DELETE("/:id", guard.Require(middleware.AdminJWT), studentHandler.Delete)
 	}
@@ -251,6 +253,11 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// self-service email code (password_reset_handler.go) never reaches the
 	// user, letting an admin set a new password directly instead.
 	v1.PUT("/users/:id/password", guard.Require(middleware.AdminJWT), userHandler.AdminResetPassword)
+
+	// Admin broadcast mail — free-form email to an explicit list of student
+	// profiles, capped per call (see admin_mail_handler.go).
+	adminMailHandler := handler.NewAdminMailHandler(db, mail)
+	v1.POST("/admin/mail", guard.Require(middleware.AdminJWT), adminMailHandler.Send)
 
 	myStudentGroup := v1.Group("/my/student")
 	myStudentGroup.Use(middleware.JWTMiddleware(jwtManager, db))
@@ -736,7 +743,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// Order routes — admin (API-key gated) and buyer (JWT gated)
 	orderRepo := postgres.NewOrderRepository(db)
 	orderTxRepo := postgres.NewOrderTransactionRepository(db)
-	marketplacePaymentSvc := service.NewMarketplacePaymentService(db, orderRepo, orderTxRepo, bkashClient, cfg.BkashCallbackBaseURL, billingSvc)
+	marketplacePaymentSvc := service.NewMarketplacePaymentService(db, orderRepo, orderTxRepo, bkashClient, cfg.BkashCallbackBaseURL, billingSvc, telegramClient)
 	orderNotifier := service.NewOrderNotifier(db, notificationService)
 	billingSvc.SetOrderNotifier(orderNotifier)
 	marketplacePaymentSvc.SetOrderNotifier(orderNotifier)
@@ -818,7 +825,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	subRepo := postgres.NewSubscriptionRepository(db)
 	bkashTxRepo := postgres.NewBkashTransactionRepository(db)
 	couponRepo := postgres.NewCouponRepository(db)
-	paymentService := service.NewPaymentService(db, subRepo, bkashTxRepo, couponRepo, bkashClient, cfg.BkashCallbackBaseURL, billingSvc)
+	paymentService := service.NewPaymentService(db, subRepo, bkashTxRepo, couponRepo, bkashClient, cfg.BkashCallbackBaseURL, billingSvc, telegramClient)
 	bkashHandler := handler.NewBkashHandler(paymentService, telegramClient)
 	paymentGroup := v1.Group("/payments/bkash")
 	paymentGroup.Use(middleware.JWTMiddleware(jwtManager, db), payLimit)

@@ -3,12 +3,15 @@ package handler
 import (
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/usecase"
+	"campusassistant-api/pkg/mailer"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/mail"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -18,13 +21,15 @@ import (
 
 type StudentHandler struct {
 	*GenericHandler[domain.Student]
-	db *gorm.DB
+	db   *gorm.DB
+	mail mailer.Mailer
 }
 
-func NewStudentHandler(u usecase.Usecase[domain.Student], db *gorm.DB) *StudentHandler {
+func NewStudentHandler(u usecase.Usecase[domain.Student], db *gorm.DB, mail mailer.Mailer) *StudentHandler {
 	return &StudentHandler{
 		GenericHandler: NewGenericHandler(u),
 		db:             db,
+		mail:           mail,
 	}
 }
 
@@ -51,6 +56,104 @@ func (h *StudentHandler) Create(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, student)
+}
+
+// SendCodeEmail emails a student their profile-claim code so the admin
+// dashboard doesn't need to hand codes over by CSV/copy-paste.
+// POST /students/:id/send-code-email (AdminJWT).
+//
+// Synchronous on purpose — the admin is waiting on the result and wants a
+// definitive answer, unlike the password-reset flow which fires and forgets.
+// With no SMTP_* configured the noop mailer just logs, mirroring how the
+// reset flow degrades in development.
+func (h *StudentHandler) SendCodeEmail(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid student id"})
+		return
+	}
+
+	var student domain.Student
+	if err := h.db.First(&student, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Student not found"})
+		return
+	}
+	if student.IsClaimed {
+		c.JSON(http.StatusConflict, gin.H{"error": "Profile already claimed — nothing to send"})
+		return
+	}
+	if student.VerificationCode == "" {
+		c.JSON(http.StatusConflict, gin.H{"error": "Student has no verification code"})
+		return
+	}
+
+	email := strings.TrimSpace(student.Email)
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Student has no email address on file"})
+		return
+	}
+	if _, err := mail.ParseAddress(email); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Student's email address is not valid"})
+		return
+	}
+
+	htmlBody, textBody := mailer.ProfileClaimBodies(student.Name, student.VerificationCode)
+	if err := h.mail.Send(email, mailer.ProfileClaimSubject, htmlBody, textBody); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send email"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"sent": true, "email": email})
+}
+
+// GenerateCode replaces an unclaimed student's verification code with a
+// fresh 6-digit numeric one — the repair path for legacy rows that predate
+// auto-generation (they can't be claimed or code-mailed without one).
+// Claimed profiles are refused: their code may remain for unclaim/verify
+// flows and regenerating it there would silently invalidate live sessions
+// mid-claim. Uniqueness is best-effort (the column is only indexed) — a
+// rare collision just retries with a new draw.
+// POST /students/:id/generate-code (AdminJWT).
+func (h *StudentHandler) GenerateCode(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid student id"})
+		return
+	}
+
+	var student domain.Student
+	if err := h.db.First(&student, "id = ?", id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Student not found"})
+		return
+	}
+	if student.IsClaimed {
+		c.JSON(http.StatusConflict, gin.H{"error": "Profile already claimed — code cannot be regenerated"})
+		return
+	}
+
+	var code string
+	for attempt := 0; attempt < 5; attempt++ {
+		code, err = generateNumericCode(6)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate code"})
+			return
+		}
+		var n int64
+		h.db.Model(&domain.Student{}).
+			Where("verification_code = ? AND is_claimed = ? AND id <> ?", code, false, id).
+			Count(&n)
+		if n == 0 {
+			break
+		}
+	}
+
+	student.VerificationCode = code
+	if err := h.db.Save(&student).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save verification code"})
+		return
+	}
+
+	c.JSON(http.StatusOK, student)
 }
 
 func (h *StudentHandler) VerifyCode(c *gin.Context) {
