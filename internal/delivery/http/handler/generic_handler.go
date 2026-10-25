@@ -74,11 +74,13 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 	limit, _ := strconv.Atoi(limitStr)
 	offset, _ := strconv.Atoi(offsetStr)
 
-	// Default to 20 if zero or negative, cap at 100 max
+	// Default to 20 if zero or negative, cap at 500 max
+	// (raised from 100: reference lists like universities/departments/batches
+	// are fetched whole by clients and can exceed 100 rows)
 	if limit <= 0 {
 		limit = 20
-	} else if limit > 100 {
-		limit = 100
+	} else if limit > 500 {
+		limit = 500
 	}
 
 	filter := make(map[string]interface{})
@@ -99,8 +101,10 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 		}
 	}
 
-	// Add boolean filters (only "true"/"false" are honoured)
-	boolFilters := []string{"is_active", "is_verified", "is_pro"}
+	// Add boolean filters (only "true"/"false" are honoured). is_claimed
+	// splits each profile pool into "claimed" (has a linked account) vs
+	// "unclaimed" (still needs a claim-code email) for the admin dashboard.
+	boolFilters := []string{"is_active", "is_verified", "is_pro", "is_claimed"}
 	for _, f := range boolFilters {
 		if val, err := strconv.ParseBool(c.Query(f)); err == nil {
 			filter[f] = val

@@ -4,6 +4,7 @@ import (
 	"campusassistant-api/internal/domain"
 	"context"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -58,6 +59,21 @@ func (r *chapterRepository) GetAll(ctx context.Context, filter map[string]interf
 	// Handle Batch Filtering
 	batchID, hasBatchID := filter["batch_id"]
 	batchName, hasBatchName := filter["batch"]
+
+	// batch_id must parse as a UUID to be usable in the subquery below.
+	// Sentinels (Flutter's "all_batches" for "All Batches"), empty strings,
+	// or garbage would make the UUID comparison error out (HTTP 500) —
+	// treat those as "no batch filter" instead.
+	if hasBatchID {
+		if s, ok := batchID.(string); !ok || s == "" {
+			hasBatchID = false
+		} else if _, err := uuid.Parse(s); err != nil {
+			hasBatchID = false
+		}
+		if !hasBatchID {
+			delete(filter, "batch_id")
+		}
+	}
 
 	// Handle Batch Filtering via subquery for cleaner DISTINCT handling in COUNT
 	if hasBatchID || hasBatchName {

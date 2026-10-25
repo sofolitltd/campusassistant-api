@@ -11,6 +11,7 @@ import (
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/pkg/bkash"
 	"campusassistant-api/pkg/logger"
+	"campusassistant-api/pkg/telegram"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -46,10 +47,11 @@ type PaymentService struct {
 	couponRepo      domain.CouponRepository
 	bkashClient     BkashGateway
 	callbackBaseURL string
-	billing         *BillingService // optional; nil skips ledger + invoices
+	billing         *BillingService  // optional; nil skips ledger + invoices
+	telegram        *telegram.Client // optional; nil skips admin Telegram alerts
 }
 
-func NewPaymentService(db *gorm.DB, subRepo domain.SubscriptionRepository, txRepo domain.BkashTransactionRepository, couponRepo domain.CouponRepository, bkashClient BkashGateway, callbackBaseURL string, billing *BillingService) *PaymentService {
+func NewPaymentService(db *gorm.DB, subRepo domain.SubscriptionRepository, txRepo domain.BkashTransactionRepository, couponRepo domain.CouponRepository, bkashClient BkashGateway, callbackBaseURL string, billing *BillingService, telegramClient *telegram.Client) *PaymentService {
 	return &PaymentService{
 		db:              db,
 		subRepo:         subRepo,
@@ -58,6 +60,7 @@ func NewPaymentService(db *gorm.DB, subRepo domain.SubscriptionRepository, txRep
 		bkashClient:     bkashClient,
 		callbackBaseURL: callbackBaseURL,
 		billing:         billing,
+		telegram:        telegramClient,
 	}
 }
 
@@ -293,9 +296,45 @@ func (s *PaymentService) ExecutePayment(ctx context.Context, userID uuid.UUID, p
 
 // fulfil turns a bKash-confirmed payment into a subscription, an invoice
 // and ledger entries — atomically, exactly once.
+// notifySubscriptionPaid fires a best-effort Telegram alert after a paid
+// subscription commits. Best-effort: sent in the background, never blocks or
+// fails the grant itself; a nil client (Telegram unconfigured) does nothing.
+func (s *PaymentService) notifySubscriptionPaid(sub *domain.UserSubscription, amount int, trxID, couponCode string) {
+	if s.telegram == nil {
+		return
+	}
+	userID, plan, end := sub.UserID, sub.Plan, sub.EndDate
+	go func() {
+		email := ""
+		var u domain.User
+		if err := s.db.First(&u, "id = ?", userID).Error; err == nil {
+			email = u.Email
+		}
+		expires := "Lifetime"
+		if end != nil {
+			expires = end.Format("2006-01-02")
+		}
+		text := fmt.Sprintf(
+			"New subscription\nUser: %s (ID: %s)\nPlan: %s\nAmount: %d BDT\nTrxID: %s\nExpires: %s",
+			email, userID, plan, amount, trxID, expires,
+		)
+		if couponCode != "" {
+			text += "\nCoupon: " + couponCode
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := s.telegram.SendMessage(ctx, text); err != nil {
+			logger.Errorf("[payment] telegram notify failed: %v", err)
+		}
+	}()
+}
+
 func (s *PaymentService) fulfil(ctx context.Context, paymentID, trxID, rawJSON string, confirmed *bkash.ExecutePaymentResult) (*domain.UserSubscription, error) {
 	var sub *domain.UserSubscription
 	var mismatch bool
+	var fresh bool
+	var charged int
+	var couponCode string
 
 	err := s.db.WithContext(ctx).Transaction(func(db *gorm.DB) error {
 		// Row lock first: whoever gets here second waits, then sees
@@ -309,6 +348,7 @@ func (s *PaymentService) fulfil(ctx context.Context, paymentID, trxID, rawJSON s
 			sub = existing
 			return err
 		}
+		charged = tx.Amount
 
 		if amt, ok := paidAmount(confirmed); ok && amt != tx.Amount {
 			mismatch = true
@@ -327,6 +367,10 @@ func (s *PaymentService) fulfil(ctx context.Context, paymentID, trxID, rawJSON s
 		grantReason := "payment"
 		if tx.CouponCodeID != nil {
 			grantReason = "coupon"
+			var cc domain.CouponCode
+			if err := db.First(&cc, "id = ?", *tx.CouponCodeID).Error; err == nil {
+				couponCode = cc.Code
+			}
 		}
 		granted, err := grantSubscription(db, tx.UserID, &plan, float64(tx.Amount), grantReason, nil)
 		if err != nil {
@@ -356,6 +400,7 @@ func (s *PaymentService) fulfil(ctx context.Context, paymentID, trxID, rawJSON s
 			return err
 		}
 		sub = granted
+		fresh = true
 		return nil
 	})
 	if err != nil {
@@ -363,6 +408,11 @@ func (s *PaymentService) fulfil(ctx context.Context, paymentID, trxID, rawJSON s
 	}
 	if mismatch {
 		return nil, ErrAmountMismatch
+	}
+	if fresh {
+		// Only when this call actually granted something — a repeat execute
+		// of an already-completed payment must not ping admins again.
+		s.notifySubscriptionPaid(sub, charged, trxID, couponCode)
 	}
 	return sub, nil
 }

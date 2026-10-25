@@ -56,7 +56,8 @@ func newRouterEnv(t *testing.T) *routerEnv {
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { sqlDB.Close() })
 	if err := db.AutoMigrate(&domain.User{}, &domain.Admin{}, &domain.Journal{}, &domain.LedgerEntry{},
-		&domain.SubscriptionPlan{}, &domain.SubscriptionTarget{}, &domain.UserSubscription{}, &domain.PlanEntitlement{}, &domain.UsageCounter{}, &domain.Student{}, &domain.AccessGrant{}); err != nil {
+		&domain.SubscriptionPlan{}, &domain.SubscriptionTarget{}, &domain.UserSubscription{}, &domain.PlanEntitlement{}, &domain.UsageCounter{}, &domain.Student{}, &domain.AccessGrant{},
+		&domain.PasswordReset{}, &domain.EmailLog{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -279,6 +280,29 @@ func TestRouter_ClaimProfileLinksTheTokenUserOnly(t *testing.T) {
 	// The code is single use.
 	if got := e.callBody("POST", "/api/v1/students/claim-profile", e.token(t, e.other.ID, "student"), `{"code":"654321"}`).Code; got != 404 {
 		t.Errorf("reusing a claimed code = %d, want 404", got)
+	}
+}
+
+func TestRouter_AdminMailRoutesAreAdminOnly(t *testing.T) {
+	e := newRouterEnv(t)
+	student := e.token(t, e.student.ID, "student")
+	admin := e.token(t, e.adminID, "admin")
+	pid := uuid.NewString()
+
+	routes := []struct{ method, path string }{
+		{"POST", "/api/v1/students/" + pid + "/send-code-email"}, // profile-claim code mail
+		{"POST", "/api/v1/admin/mail"},                           // admin broadcast
+	}
+	for _, rt := range routes {
+		if got := e.call(rt.method, rt.path, "").Code; got != 401 {
+			t.Errorf("%s %s without a token = %d, want 401", rt.method, rt.path, got)
+		}
+		if got := e.call(rt.method, rt.path, student).Code; got != 403 {
+			t.Errorf("%s %s as a student = %d, want 403", rt.method, rt.path, got)
+		}
+		if got := e.call(rt.method, rt.path, admin).Code; got == 401 || got == 403 {
+			t.Errorf("%s %s as admin = %d, must be allowed through", rt.method, rt.path, got)
+		}
 	}
 }
 

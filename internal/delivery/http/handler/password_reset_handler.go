@@ -104,7 +104,7 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	exists, err := h.accountExists(email, accountType)
+	exists, err := accountExists(h.db, email, accountType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
 		return
@@ -114,38 +114,9 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	code, err := generateResetCode()
+	code, _, err := issueResetCode(h.db, email, accountType, ip)
 	if err != nil {
-		logger.Errorf("Password reset: failed to generate code: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create reset code"})
-		return
-	}
-
-	codeHash, err := auth.HashCode(code)
-	if err != nil {
-		logger.Errorf("Password reset: failed to hash code: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create reset code"})
-		return
-	}
-
-	// Supersede any codes still outstanding for this account, so only the most
-	// recently emailed code works.
-	now := time.Now()
-	if err := h.db.Model(&domain.PasswordReset{}).
-		Where("email = ? AND account_type = ? AND consumed_at IS NULL", email, accountType).
-		Update("consumed_at", now).Error; err != nil {
-		logger.Errorf("Password reset: failed to supersede old codes: %v", err)
-	}
-
-	reset := domain.PasswordReset{
-		Email:       email,
-		AccountType: accountType,
-		CodeHash:    codeHash,
-		RequestIP:   ip,
-		ExpiresAt:   now.Add(domain.ResetCodeTTL),
-	}
-	if err := h.db.Create(&reset).Error; err != nil {
-		logger.Errorf("Password reset: failed to persist reset row: %v", err)
+		logger.Errorf("Password reset: failed to create reset row for %s: %v", email, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create reset code"})
 		return
 	}
@@ -153,11 +124,17 @@ func (h *AuthHandler) ForgotPassword(c *gin.Context) {
 	// Send off the request path. SMTP round-trips take hundreds of
 	// milliseconds; doing this inline would make "account exists" measurably
 	// slower than "account missing" and reintroduce enumeration by timing.
+	// Each outcome lands in email_logs (kind=password_reset) so the admin
+	// dashboard can see whether the mail actually went out.
 	go func(to, code string) {
 		htmlBody, textBody := mailer.PasswordResetBodies(code, int(domain.ResetCodeTTL.Minutes()))
 		if err := h.mailer.Send(to, mailer.PasswordResetSubject, htmlBody, textBody); err != nil {
-			logger.Errorf("Password reset: failed to email %s: %v", to, err)
+			recordEmailLog(h.db, to, mailer.PasswordResetSubject, domain.EmailKindPasswordReset,
+				domain.EmailStatusFailed, err.Error(), nil, nil)
+			return
 		}
+		recordEmailLog(h.db, to, mailer.PasswordResetSubject, domain.EmailKindPasswordReset,
+			domain.EmailStatusSent, "", nil, nil)
 	}(email, code)
 
 	c.JSON(http.StatusOK, gin.H{"message": genericResetResponse})
@@ -336,18 +313,57 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	})
 }
 
-// accountExists reports whether the address maps to an active account, without
-// revealing that to the caller.
-func (h *AuthHandler) accountExists(email, accountType string) (bool, error) {
+// issueResetCode generates a fresh code, supersedes any still-outstanding
+// codes for the account (so only the most recently issued one works) and
+// persists the reset row. Shared by ForgotPassword and the admin
+// IssueCode endpoint; returns the plaintext code for the caller to deliver.
+//
+// Supersedence failure is degraded-but-tolerated, like the original inline
+// logic: the new code still works, an old one might too.
+func issueResetCode(db *gorm.DB, email, accountType, requestIP string) (string, *domain.PasswordReset, error) {
+	code, err := generateResetCode()
+	if err != nil {
+		return "", nil, err
+	}
+
+	codeHash, err := auth.HashCode(code)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if err := db.Model(&domain.PasswordReset{}).
+		Where("email = ? AND account_type = ? AND consumed_at IS NULL", email, accountType).
+		Update("consumed_at", time.Now()).Error; err != nil {
+		logger.Errorf("Password reset: failed to supersede old codes for %s: %v", email, err)
+	}
+
+	reset := &domain.PasswordReset{
+		Email:       email,
+		AccountType: accountType,
+		CodeHash:    codeHash,
+		RequestIP:   requestIP,
+		ExpiresAt:   time.Now().Add(domain.ResetCodeTTL),
+	}
+	if err := db.Create(reset).Error; err != nil {
+		return "", nil, err
+	}
+	return code, reset, nil
+}
+
+// accountExists reports whether the address maps to an active account. The
+// answer must never reach the client of the public flow (enumeration guard),
+// but the admin issue endpoint may reply with a plain 404 — its caller is
+// already an authenticated admin.
+func accountExists(db *gorm.DB, email, accountType string) (bool, error) {
 	var count int64
 	var err error
 
 	if accountType == domain.ResetAccountAdmin {
-		err = h.db.Model(&domain.Admin{}).
+		err = db.Model(&domain.Admin{}).
 			Where("email = ? AND is_active = ?", email, true).
 			Count(&count).Error
 	} else {
-		err = h.db.Model(&domain.User{}).
+		err = db.Model(&domain.User{}).
 			Where("email = ? AND is_active = ?", email, true).
 			Count(&count).Error
 	}
