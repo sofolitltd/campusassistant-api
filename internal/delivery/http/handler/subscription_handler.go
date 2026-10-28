@@ -15,7 +15,7 @@ import (
 )
 
 type SubscriptionHandler struct {
-	repo    domain.SubscriptionRepository
+	repo     domain.SubscriptionRepository
 	payments *service.PaymentService
 }
 
@@ -86,6 +86,28 @@ func (h *SubscriptionHandler) GetUserSubscription(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, sub)
+}
+
+// GetUserSubscriptionHistory returns every subscription row for a user,
+// newest first — unlike GetUserSubscription, which only returns the latest.
+func (h *SubscriptionHandler) GetUserSubscriptionHistory(c *gin.Context) {
+	userID, _ := uuid.Parse(c.Param("uid"))
+
+	callerID, _ := c.Get("user_id")
+	callerRole, _ := c.Get("user_role")
+	role, _ := callerRole.(string)
+	if id, ok := callerID.(uuid.UUID); !ok || (id != userID && role != "admin" && role != "super_admin") {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You can only view your own subscription history"})
+		return
+	}
+
+	subs, err := h.repo.GetUserSubscriptionHistory(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch subscription history"})
+		return
+	}
+
+	c.JSON(http.StatusOK, subs)
 }
 
 type adminSetExpiryRequest struct {
@@ -180,6 +202,19 @@ func (h *SubscriptionHandler) GetAllSubscriptions(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": subs, "count": count, "total_revenue": totalRevenue, "offset": offset, "limit": limit})
+}
+
+// GetGrantedSubscriptions is the "who's getting free Pro" shortlist — every
+// admin_grant row, newest first, with the granting admin resolved to a name.
+func (h *SubscriptionHandler) GetGrantedSubscriptions(c *gin.Context) {
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	subs, count, err := h.repo.GetGrantedSubscriptions(c.Request.Context(), offset, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch granted subscriptions"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": subs, "count": count, "offset": offset, "limit": limit})
 }
 
 func (h *SubscriptionHandler) CreateSubscription(c *gin.Context) {

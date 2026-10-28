@@ -20,24 +20,24 @@ func NewSubscriptionRepository(db *gorm.DB) domain.SubscriptionRepository {
 
 func (r *subscriptionRepository) GetPlansByLocation(ctx context.Context, universityID, departmentID uuid.UUID) ([]domain.SubscriptionPlan, error) {
 	var plans []domain.SubscriptionPlan
-	
+
 	// Find plans that target this university (either specific department or whole uni)
 	err := r.db.WithContext(ctx).
 		Distinct("subscription_plans.*").
 		Joins("JOIN subscription_targets ON subscription_targets.plan_id = subscription_plans.id").
-		Where("subscription_targets.university_id = ? AND (subscription_targets.department_id = ? OR subscription_targets.department_id = ?)", 
+		Where("subscription_targets.university_id = ? AND (subscription_targets.department_id = ? OR subscription_targets.department_id = ?)",
 			universityID, departmentID, uuid.Nil).
 		Order("subscription_plans.index asc").
 		Preload("Targets").
 		Find(&plans).Error
-		
+
 	return plans, err
 }
 
 func (r *subscriptionRepository) GetUserSubscription(ctx context.Context, userID uuid.UUID) (*domain.UserSubscription, error) {
 	var sub domain.UserSubscription
 	err := r.db.WithContext(ctx).
-		Preload("User").
+		Preload("User", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Where("user_id = ?", userID).
 		Order("created_at desc").
 		First(&sub).Error
@@ -62,6 +62,13 @@ func (r *subscriptionRepository) CreateUserSubscription(ctx context.Context, sub
 			}
 		}
 
+		// GraceEndsAt is the real access cutoff (User.ProExpiry mirrors it);
+		// EndDate itself stays the true paid-for period for stacking/history.
+		if sub.EndDate != nil {
+			graceEnd := sub.EndDate.AddDate(0, 0, domain.GraceDays)
+			sub.GraceEndsAt = &graceEnd
+		}
+
 		// 1. Create the subscription record
 		if err := tx.Create(sub).Error; err != nil {
 			return err
@@ -72,9 +79,18 @@ func (r *subscriptionRepository) CreateUserSubscription(ctx context.Context, sub
 			Where("id = ?", sub.UserID).
 			Updates(map[string]interface{}{
 				"is_pro":     true,
-				"pro_expiry": sub.EndDate,
+				"pro_expiry": sub.GraceEndsAt,
 			}).Error
 	})
+}
+
+func (r *subscriptionRepository) GetUserSubscriptionHistory(ctx context.Context, userID uuid.UUID) ([]domain.UserSubscription, error) {
+	var subs []domain.UserSubscription
+	err := r.db.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("created_at desc").
+		Find(&subs).Error
+	return subs, err
 }
 
 // Admin Methods
@@ -112,22 +128,39 @@ func (r *subscriptionRepository) GetAllSubscriptions(ctx context.Context, offset
 	r.db.WithContext(ctx).Model(&domain.UserSubscription{}).Select("COALESCE(SUM(price), 0)").Scan(&totalRevenue)
 
 	err := r.db.WithContext(ctx).
-		Preload("User").
+		Preload("User", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Order("start_date desc").
 		Offset(offset).Limit(limit).
 		Find(&subs).Error
 	return subs, count, totalRevenue, err
 }
 
+func (r *subscriptionRepository) GetGrantedSubscriptions(ctx context.Context, offset, limit int) ([]domain.UserSubscription, int64, error) {
+	var subs []domain.UserSubscription
+	var count int64
+
+	base := r.db.WithContext(ctx).Model(&domain.UserSubscription{}).Where("grant_reason = ?", "admin_grant")
+	base.Count(&count)
+
+	err := r.db.WithContext(ctx).
+		Where("grant_reason = ?", "admin_grant").
+		Preload("User", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Preload("GrantedByAdmin").
+		Order("created_at desc").
+		Offset(offset).Limit(limit).
+		Find(&subs).Error
+	return subs, count, err
+}
+
 func (r *subscriptionRepository) ExpireSubscriptions(ctx context.Context) (int64, error) {
 	now := time.Now()
-	
+
 	// Find users with expired Pro status
 	var expiredUserIDs []uuid.UUID
 	err := r.db.WithContext(ctx).Model(&domain.User{}).
 		Where("is_pro = ? AND pro_expiry < ?", true, now).
 		Pluck("id", &expiredUserIDs).Error
-		
+
 	if err != nil || len(expiredUserIDs) == 0 {
 		return 0, err
 	}
@@ -139,7 +172,7 @@ func (r *subscriptionRepository) ExpireSubscriptions(ctx context.Context) (int64
 			"is_pro":     false,
 			"pro_expiry": nil,
 		})
-		
+
 	return result.RowsAffected, result.Error
 }
 
@@ -154,9 +187,13 @@ func (r *subscriptionRepository) AdminSetExpiry(ctx context.Context, userID uuid
 		if err := tx.Where("user_id = ?", userID).Order("created_at desc").First(&sub).Error; err != nil {
 			return err
 		}
+		// A manual override is exact — it does not imply an extra grace
+		// window on top of whatever the admin picked, so GraceEndsAt
+		// collapses onto EndDate itself here.
 		sub.EndDate = endDate
+		sub.GraceEndsAt = endDate
 		if err := tx.Model(&domain.UserSubscription{}).Where("id = ?", sub.ID).
-			Update("end_date", endDate).Error; err != nil {
+			Updates(map[string]interface{}{"end_date": endDate, "grace_ends_at": endDate}).Error; err != nil {
 			return err
 		}
 		return tx.Model(&domain.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
