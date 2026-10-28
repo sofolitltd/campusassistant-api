@@ -57,6 +57,20 @@ type Merchant struct {
 	PayoutMethod  string `gorm:"size:20" json:"payout_method,omitempty"`   // e.g. "bkash", "nagad", "bank"
 	PayoutAccount string `gorm:"size:255" json:"payout_account,omitempty"` // account/wallet number
 
+	// City is the merchant's base/shipping-origin city, used only to decide
+	// which of the two delivery charges below applies to an order (same city
+	// as the buyer's shipping address vs. outside it). Public, unlike
+	// Phone/Email — a buyer needs it to know their delivery cost before
+	// checkout.
+	City string `gorm:"size:100" json:"city,omitempty"`
+	// DeliveryChargeInside/Outside are flat delivery fees this merchant
+	// charges per order, in Taka (same unit as Product.Price/Order.TotalAmount
+	// elsewhere in this codebase — poisha is never actually used despite some
+	// stale comments). Zero (the default) means free delivery, so existing
+	// merchants are unaffected until they opt in by setting these.
+	DeliveryChargeInside  int `gorm:"default:0" json:"delivery_charge_inside"`
+	DeliveryChargeOutside int `gorm:"default:0" json:"delivery_charge_outside"`
+
 	// Review aggregates across all of this merchant's products. Read-only
 	// through GORM ("->"); ReviewService recomputes them with raw SQL.
 	RatingAvg   float64 `gorm:"->;default:0" json:"rating_avg"`
