@@ -402,6 +402,18 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 	registerRoutes[domain.Routine](v1, db, "routines", guard, middleware.Access{Read: middleware.AuthJWT, Write: middleware.AdminJWT})
 
+	// Exam notices: generic CRUD wouldn't let Create fan out a push the
+	// moment an exam is posted, so this graduated to a dedicated handler.
+	examNoticeHandler := handler.NewExamNoticeHandler(db, notificationService)
+	eng := v1.Group("/exam-notices")
+	{
+		eng.GET("", guard.Require(middleware.AuthJWT), examNoticeHandler.List)
+		eng.POST("", guard.Require(middleware.AdminJWT), examNoticeHandler.Create)
+		eng.PUT("/:id", guard.Require(middleware.AdminJWT), examNoticeHandler.Update)
+		eng.DELETE("/:id", guard.Require(middleware.AdminJWT), examNoticeHandler.Delete)
+	}
+	service.NewExamReminderScheduler(db, notificationService).Start(context.Background())
+
 	// Class schedule: weekly recurring slots + per-date status overrides.
 	// Reads are open to any signed-in user; writes are authorised per
 	// request inside the handler (admin, or the current CR of that batch).
@@ -468,7 +480,9 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	statsHandler := handler.NewStatsHandler(statsRepo)
 	v1.GET("/stats", guard.Require(middleware.AdminJWT), statsHandler.GetDashboardStats)
 	v1.GET("/stats/user-growth", guard.Require(middleware.AdminJWT), statsHandler.GetUserGrowth)
+	v1.GET("/stats/subscription-analytics", guard.Require(middleware.AdminJWT), statsHandler.GetSubscriptionAnalytics)
 	v1.GET("/users/stats", guard.Require(middleware.AdminJWT), statsHandler.GetUserStats)
+	v1.GET("/stats/active-users", guard.Require(middleware.AdminJWT), statsHandler.GetActiveUsers)
 
 	// Rewards: coin-based system for resource access. Users earn coins by
 	// watching ads, spend coins to access resources by file size.
@@ -855,10 +869,12 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	{
 		subGroup.GET("/plans", subHandler.GetPlans)
 		subGroup.GET("/user/:uid", subHandler.GetUserSubscription)
+		subGroup.GET("/user/:uid/history", subHandler.GetUserSubscriptionHistory)
 
 		// Admin Routes — RequireAdmin always enforces (these used to be
 		// reachable by any logged-in user, who could grant themselves Pro).
 		subGroup.GET("", middleware.RequireAdmin(), subHandler.GetAllSubscriptions)
+		subGroup.GET("/granted", middleware.RequireAdmin(), subHandler.GetGrantedSubscriptions)
 		subGroup.POST("", middleware.RequireAdmin(), subHandler.CreateSubscription)
 		subGroup.POST("/admin-grant", middleware.RequireAdmin(), subHandler.AdminGrantPro)
 		subGroup.PUT("/user/:uid/expiry", middleware.RequireAdmin(), subHandler.AdminSetExpiry)
@@ -1050,6 +1066,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		deviceGroup.DELETE("/:id", deviceHandler.RemoveDevice)
 		deviceGroup.POST("/logout-all", deviceHandler.LogoutAll)
 		deviceGroup.POST("/logout-others", deviceHandler.LogoutOthers)
+		deviceGroup.POST("/heartbeat", deviceHandler.Heartbeat)
 	}
 
 	// Notification preference (mute-by-category) Routes — require JWT

@@ -82,6 +82,37 @@ func (h *DeviceHandler) RegisterDevice(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Device registered"})
 }
 
+type heartbeatRequest struct {
+	FCMToken string `json:"fcm_token" binding:"required"`
+}
+
+// Heartbeat bumps last_seen_at on the caller's existing device row, without
+// touching platform/topics the way RegisterDevice does — called periodically
+// while the app is in the foreground so admin "active users" stats reflect
+// real-time usage instead of only login/token-refresh moments. A missing row
+// (device never registered, or token stale) is silently ignored: the next
+// RegisterDevice call will recreate it.
+// POST /devices/heartbeat
+func (h *DeviceHandler) Heartbeat(c *gin.Context) {
+	var req heartbeatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID := c.MustGet("user_id").(uuid.UUID)
+
+	if err := h.db.WithContext(c.Request.Context()).
+		Model(&domain.UserDevice{}).
+		Where("user_id = ? AND fcm_token = ?", userID, req.FCMToken).
+		UpdateColumn("last_seen_at", time.Now()).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "ok"})
+}
+
 type deviceResponse struct {
 	ID         uuid.UUID `json:"id"`
 	Platform   string    `json:"platform"`
