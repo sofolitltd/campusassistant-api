@@ -70,7 +70,7 @@ func (h *SystemLogHandler) List(c *gin.Context) {
 		return
 	}
 
-	var logs []domain.SystemLog
+	logs := []domain.SystemLog{}
 	if err := query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&logs).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -96,7 +96,7 @@ func (h *SystemLogHandler) Stats(c *gin.Context) {
 		Path  string `json:"path"`
 		Count int64  `json:"count"`
 	}
-	var topPaths []pathCount
+	topPaths := []pathCount{}
 	h.db.Model(&domain.SystemLog{}).
 		Select("path, count(*) as count").
 		Where("created_at >= ?", weekStart).

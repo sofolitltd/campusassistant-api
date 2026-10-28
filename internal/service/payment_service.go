@@ -372,7 +372,7 @@ func (s *PaymentService) fulfil(ctx context.Context, paymentID, trxID, rawJSON s
 				couponCode = cc.Code
 			}
 		}
-		granted, err := grantSubscription(db, tx.UserID, &plan, float64(tx.Amount), grantReason, nil)
+		granted, err := grantSubscription(db, tx.UserID, &plan, float64(tx.Amount), grantReason, nil, "")
 		if err != nil {
 			return err
 		}
@@ -440,14 +440,29 @@ func (s *PaymentService) subscriptionForDB(db *gorm.DB, tx *domain.BkashTransact
 // Renewals stack: buying while already Pro extends from the current expiry
 // instead of overwriting it, and a lifetime user never gets downgraded to a
 // dated expiry. The user row is locked so concurrent grants serialise.
-func grantSubscription(db *gorm.DB, userID uuid.UUID, plan *domain.SubscriptionPlan, price float64, reason string, grantedBy *uuid.UUID) (*domain.UserSubscription, error) {
+func grantSubscription(db *gorm.DB, userID uuid.UUID, plan *domain.SubscriptionPlan, price float64, reason string, grantedBy *uuid.UUID, note string) (*domain.UserSubscription, error) {
 	var user domain.User
 	if err := db.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, "id = ?", userID).Error; err != nil {
 		return nil, fmt.Errorf("load user: %w", err)
 	}
 
+	// Stack off the latest subscription row's true EndDate, not
+	// User.ProExpiry — ProExpiry now includes the grace window, and
+	// stacking off that would silently gift extra days on every renewal
+	// made during grace.
+	var latest domain.UserSubscription
+	currentExpiry := user.ProExpiry
+	if err := db.Where("user_id = ?", userID).Order("created_at desc").First(&latest).Error; err == nil {
+		currentExpiry = latest.EndDate
+	}
+
 	now := time.Now()
-	endDate := subscriptionEnd(now, user.IsPro, user.ProExpiry, plan)
+	endDate := subscriptionEnd(now, user.IsPro, currentExpiry, plan)
+	var graceEnd *time.Time
+	if endDate != nil {
+		g := endDate.AddDate(0, 0, domain.GraceDays)
+		graceEnd = &g
+	}
 
 	sub := &domain.UserSubscription{
 		UserID:      userID,
@@ -456,15 +471,17 @@ func grantSubscription(db *gorm.DB, userID uuid.UUID, plan *domain.SubscriptionP
 		Price:       price,
 		StartDate:   now,
 		EndDate:     endDate,
+		GraceEndsAt: graceEnd,
 		GrantedBy:   grantedBy,
 		GrantReason: reason,
+		Note:        note,
 	}
 	if err := db.Create(sub).Error; err != nil {
 		return nil, fmt.Errorf("failed to create subscription: %w", err)
 	}
 	if err := db.Model(&domain.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
 		"is_pro":     true,
-		"pro_expiry": endDate,
+		"pro_expiry": graceEnd,
 	}).Error; err != nil {
 		return nil, fmt.Errorf("failed to update user pro status: %w", err)
 	}
@@ -605,7 +622,7 @@ func (s *PaymentService) AdminGrantPro(ctx context.Context, adminID, userID, pla
 	}
 	var sub *domain.UserSubscription
 	err := s.db.WithContext(ctx).Transaction(func(db *gorm.DB) error {
-		granted, err := grantSubscription(db, userID, &plan, 0, "admin_grant", &adminID)
+		granted, err := grantSubscription(db, userID, &plan, 0, "admin_grant", &adminID, note)
 		sub = granted
 		return err
 	})

@@ -25,17 +25,20 @@ func (r *statsRepository) GetDashboardStats(ctx context.Context) (*domain.Dashbo
 
 	if r.db.Migrator().HasTable("user_subscriptions") {
 		r.db.WithContext(ctx).Model(&domain.UserSubscription{}).Count(&stats.TotalSubscriptions)
+		r.db.WithContext(ctx).Model(&domain.UserSubscription{}).Where("grant_reason = ?", "admin_grant").Count(&stats.FreeSubscriptions)
+		stats.PaidSubscriptions = stats.TotalSubscriptions - stats.FreeSubscriptions
 
-		// Revenue: sum of plan prices for all subscriptions
+		// Revenue: sum of the price actually charged per subscription, as
+		// cached on the row at creation time — not the plan's current price.
+		// Admin-granted ("free Pro") subscriptions have price=0 and must
+		// stay at 0, not get repriced to whatever the plan costs today.
 		type revenueResult struct {
 			Total float64
 		}
 		var rev revenueResult
 		r.db.WithContext(ctx).
-			Table("user_subscriptions").
-			Select("COALESCE(SUM(subscription_plans.price), 0) as total").
-			Joins("LEFT JOIN subscription_plans ON subscription_plans.id = user_subscriptions.plan_id").
-			Where("user_subscriptions.deleted_at IS NULL").
+			Model(&domain.UserSubscription{}).
+			Select("COALESCE(SUM(price), 0) as total").
 			Scan(&rev)
 		stats.TotalRevenue = rev.Total
 	}
@@ -120,6 +123,138 @@ func (r *statsRepository) GetUserStats(ctx context.Context) (*domain.UserStats, 
 		COUNT(*) FILTER (WHERE role = 'teacher') AS teachers,
 		COUNT(*) FILTER (WHERE role = 'staff') AS staff
 	`).Scan(&stats).Error
+	return &stats, err
+}
+
+// GetSubscriptionAnalytics returns zero-filled subscription count/revenue
+// series for one of the dashboard ranges (see GetUserGrowth for the range
+// semantics), plus a plan breakdown over the same window. Bucketed by
+// StartDate in Bangladesh time, same as GetUserGrowth buckets by created_at.
+func (r *statsRepository) GetSubscriptionAnalytics(ctx context.Context, rng string) (*domain.SubscriptionAnalytics, error) {
+	now := time.Now().In(growthTZ)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, growthTZ)
+	thisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, growthTZ)
+
+	var (
+		granularity string
+		start       time.Time
+	)
+	switch rng {
+	case "today":
+		granularity, start = "hour", today
+	case "30d":
+		granularity, start = "day", today.AddDate(0, 0, -29)
+	case "12m":
+		granularity, start = "month", thisMonth.AddDate(0, -11, 0)
+	case "lifetime":
+		var first *time.Time
+		if err := r.db.WithContext(ctx).Model(&domain.UserSubscription{}).Select("MIN(start_date)").Scan(&first).Error; err != nil {
+			return nil, err
+		}
+		start = thisMonth
+		if first != nil {
+			f := first.In(growthTZ)
+			start = time.Date(f.Year(), f.Month(), 1, 0, 0, 0, 0, growthTZ)
+		}
+		granularity = "month"
+		if months := (now.Year()-start.Year())*12 + int(now.Month()-start.Month()) + 1; months > 36 {
+			granularity = "year"
+			start = time.Date(start.Year(), 1, 1, 0, 0, 0, 0, growthTZ)
+		}
+	default:
+		rng = "7d"
+		granularity, start = "day", today.AddDate(0, 0, -6)
+	}
+
+	keyFormat := map[string]string{"hour": "YYYY-MM-DD\"T\"HH24", "day": "YYYY-MM-DD", "month": "YYYY-MM", "year": "YYYY"}[granularity]
+	goFormat := map[string]string{"hour": "2006-01-02T15", "day": "2006-01-02", "month": "2006-01", "year": "2006"}[granularity]
+
+	bucket := fmt.Sprintf("TO_CHAR(DATE_TRUNC('%s', start_date AT TIME ZONE '%s'), '%s')", granularity, growthTZName, keyFormat)
+	type bucketRow struct {
+		Bucket  string
+		Count   int64
+		Revenue float64
+	}
+	var rows []bucketRow
+	if err := r.db.WithContext(ctx).
+		Model(&domain.UserSubscription{}).
+		Select(bucket+" AS bucket, COUNT(*) AS count, COALESCE(SUM(price), 0) AS revenue").
+		Where("start_date >= ?", start).
+		Group("bucket").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int64, len(rows))
+	revenues := make(map[string]float64, len(rows))
+	for _, row := range rows {
+		counts[row.Bucket] = row.Count
+		revenues[row.Bucket] = row.Revenue
+	}
+
+	analytics := &domain.SubscriptionAnalytics{Range: rng, Granularity: granularity, Points: []domain.SubscriptionPoint{}}
+	step := func(t time.Time) time.Time {
+		switch granularity {
+		case "hour":
+			return t.Add(time.Hour)
+		case "day":
+			return t.AddDate(0, 0, 1)
+		case "month":
+			return t.AddDate(0, 1, 0)
+		default:
+			return t.AddDate(1, 0, 0)
+		}
+	}
+	end := now
+	if granularity == "hour" {
+		end = time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, growthTZ)
+	}
+	for t := start; !t.After(end); t = step(t) {
+		key := t.Format(goFormat)
+		analytics.Points = append(analytics.Points, domain.SubscriptionPoint{Date: key, Count: counts[key], Revenue: revenues[key]})
+		analytics.TotalCount += counts[key]
+		analytics.TotalRevenue += revenues[key]
+	}
+
+	type planRow struct {
+		Plan    string
+		Count   int64
+		Revenue float64
+	}
+	var planRows []planRow
+	if err := r.db.WithContext(ctx).
+		Model(&domain.UserSubscription{}).
+		Select("plan, COUNT(*) AS count, COALESCE(SUM(price), 0) AS revenue").
+		Where("start_date >= ?", start).
+		Group("plan").
+		Order("revenue DESC").
+		Scan(&planRows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range planRows {
+		analytics.PlanBreakdown = append(analytics.PlanBreakdown, domain.PlanBreakdown{Plan: row.Plan, Count: row.Count, Revenue: row.Revenue})
+	}
+
+	return analytics, nil
+}
+
+// GetActiveUserStats counts distinct users whose UserDevice.LastSeenAt falls
+// within each window, in one table scan. "Now" is a 5-minute window (the
+// app's heartbeat interval should be shorter than this so a still-open app
+// never drops out between beats).
+func (r *statsRepository) GetActiveUserStats(ctx context.Context) (*domain.ActiveUserStats, error) {
+	now := time.Now().In(growthTZ)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, growthTZ)
+
+	var stats domain.ActiveUserStats
+	err := r.db.WithContext(ctx).
+		Table("user_devices").
+		Select(`
+			COUNT(DISTINCT user_id) FILTER (WHERE last_seen_at >= NOW() - INTERVAL '5 minutes') AS now,
+			COUNT(DISTINCT user_id) FILTER (WHERE last_seen_at >= ?) AS today,
+			COUNT(DISTINCT user_id) FILTER (WHERE last_seen_at >= NOW() - INTERVAL '7 days') AS week,
+			COUNT(DISTINCT user_id) FILTER (WHERE last_seen_at >= NOW() - INTERVAL '30 days') AS month
+		`, today).
+		Scan(&stats).Error
 	return &stats, err
 }
 

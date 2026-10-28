@@ -6,6 +6,7 @@ import (
 	"fmt"
 	stdlog "log"
 	"net/http"
+	"strings"
 	"time"
 
 	"campusassistant-api/internal/domain"
@@ -169,6 +170,17 @@ func (h *OrderHandler) UpdateOrderStatus(c *gin.Context) {
 // Buyer endpoints (JWT gated)
 // ==============================
 
+// deliveryChargeFor is merchant's flat delivery fee for an order shipping to
+// buyerCity — the "inside" rate when it matches the merchant's own city
+// (case/whitespace-insensitive), the "outside" rate otherwise. A merchant
+// with no City set always charges the outside rate.
+func deliveryChargeFor(merchant *domain.Merchant, buyerCity string) int {
+	if merchant.City != "" && strings.EqualFold(strings.TrimSpace(merchant.City), strings.TrimSpace(buyerCity)) {
+		return merchant.DeliveryChargeInside
+	}
+	return merchant.DeliveryChargeOutside
+}
+
 // Checkout creates an Order + OrderItems from a cart payload + address_id.
 func (h *OrderHandler) Checkout(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
@@ -192,6 +204,10 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 
 	var totalAmount int
 	var items []domain.OrderItem
+	// One delivery charge per distinct merchant represented in the cart, not
+	// per item — keyed by merchant ID so two items from the same seller don't
+	// double-charge delivery.
+	merchantDelivery := map[uuid.UUID]int{}
 
 	for _, ci := range req.Items {
 		product, err := h.productRepo.GetProductByID(c.Request.Context(), ci.ProductID)
@@ -200,7 +216,8 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 			return
 		}
 
-		// Resolve commission rate from the product's merchant
+		// Resolve commission rate (and this seller's delivery charge) from
+		// the product's merchant
 		commissionRate := 0.0
 		if product.MerchantID != uuid.Nil {
 			merchant, err := h.merchantRepo.GetMerchantByID(c.Request.Context(), product.MerchantID)
@@ -208,6 +225,9 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 				commissionRate = merchant.CommissionRate
 				if h.commission != nil {
 					commissionRate = h.commission.EffectiveRate(c.Request.Context(), merchant)
+				}
+				if _, seen := merchantDelivery[merchant.ID]; !seen {
+					merchantDelivery[merchant.ID] = deliveryChargeFor(merchant, address.City)
 				}
 			}
 		}
@@ -224,6 +244,12 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 			CommissionRateSnapshot: commissionRate,
 		})
 	}
+
+	var deliveryCharge int
+	for _, charge := range merchantDelivery {
+		deliveryCharge += charge
+	}
+	totalAmount += deliveryCharge
 
 	paymentMethod := req.PaymentMethod
 	if paymentMethod != domain.PaymentMethodCashOnDelivery {
@@ -243,6 +269,7 @@ func (h *OrderHandler) Checkout(c *gin.Context) {
 		ShippingPhone:         address.Phone,
 		ShippingAddressLine:   address.AddressLine,
 		ShippingCity:          address.City,
+		DeliveryCharge:        deliveryCharge,
 		TotalAmount:           totalAmount,
 		Status:                status,
 		PaymentMethod:         paymentMethod,

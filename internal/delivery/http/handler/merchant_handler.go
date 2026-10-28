@@ -363,18 +363,21 @@ func (h *MerchantHandler) UpdateMyMerchant(c *gin.Context) {
 	}
 
 	var body struct {
-		BusinessName      string `json:"business_name" binding:"required"`
-		Description       string `json:"description"`
-		LogoURL           string `json:"logo_url"`
-		BusinessType      string `json:"business_type"`
-		Phone             string `json:"phone"`
-		Email             string `json:"email"`
-		Website           string `json:"website"`
-		SocialMediaLink   string `json:"social_media_link"`
-		StudentIDProofURL string `json:"student_id_proof_url"`
-		NIDProofURL       string `json:"nid_proof_url"`
-		PayoutMethod      string `json:"payout_method"`
-		PayoutAccount     string `json:"payout_account"`
+		BusinessName          string `json:"business_name" binding:"required"`
+		Description           string `json:"description"`
+		LogoURL               string `json:"logo_url"`
+		BusinessType          string `json:"business_type"`
+		Phone                 string `json:"phone"`
+		Email                 string `json:"email"`
+		Website               string `json:"website"`
+		SocialMediaLink       string `json:"social_media_link"`
+		StudentIDProofURL     string `json:"student_id_proof_url"`
+		NIDProofURL           string `json:"nid_proof_url"`
+		PayoutMethod          string `json:"payout_method"`
+		PayoutAccount         string `json:"payout_account"`
+		City                  string `json:"city"`
+		DeliveryChargeInside  int    `json:"delivery_charge_inside"`
+		DeliveryChargeOutside int    `json:"delivery_charge_outside"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -405,6 +408,9 @@ func (h *MerchantHandler) UpdateMyMerchant(c *gin.Context) {
 	merchant.NIDProofURL = body.NIDProofURL
 	merchant.PayoutMethod = body.PayoutMethod
 	merchant.PayoutAccount = body.PayoutAccount
+	merchant.City = body.City
+	merchant.DeliveryChargeInside = body.DeliveryChargeInside
+	merchant.DeliveryChargeOutside = body.DeliveryChargeOutside
 	if err := h.repo.UpdateMerchant(c.Request.Context(), merchant); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update merchant"})
 		return

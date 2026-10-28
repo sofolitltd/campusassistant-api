@@ -8,6 +8,7 @@ import (
 	"campusassistant-api/internal/config"
 	"campusassistant-api/internal/domain"
 
+	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -212,6 +213,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.UserDeletedMessage{},
 		&domain.Notice{},
 		&domain.ClassNotice{},
+		&domain.ExamNotice{},
 		&domain.ClassSlot{},
 		&domain.ClassSlotStatus{},
 		&domain.Contributor{},
@@ -367,6 +369,93 @@ func RunMigrations(db *gorm.DB) error {
 			}
 			return nil
 		})
+	})
+
+	// Backfill the new grace_ends_at column (added above by AutoMigrate):
+	// every existing dated subscription row gets EndDate + GraceDays so
+	// history/status display is correct for old rows too. Then, only for
+	// users who are *currently* Pro with a dated expiry (i.e. not already
+	// lapsed), bump their access up to match — a pure upside, since it only
+	// ever extends access, never shortens it. Already-lapsed users are not
+	// revived; their rows still get grace_ends_at filled in for the record.
+	once(db, "backfill_subscription_grace_ends_at", func() error {
+		if err := db.Exec(`
+			UPDATE user_subscriptions
+			SET grace_ends_at = end_date + ? * INTERVAL '1 day'
+			WHERE end_date IS NOT NULL AND grace_ends_at IS NULL
+		`, domain.GraceDays).Error; err != nil {
+			return err
+		}
+		return db.Exec(`
+			UPDATE users u
+			SET pro_expiry = us.grace_ends_at
+			FROM (
+				SELECT DISTINCT ON (user_id) user_id, grace_ends_at
+				FROM user_subscriptions
+				ORDER BY user_id, created_at DESC
+			) us
+			WHERE u.id = us.user_id
+			  AND u.is_pro = true
+			  AND u.pro_expiry IS NOT NULL
+			  AND us.grace_ends_at IS NOT NULL
+		`).Error
+	})
+
+	// Some users are is_pro=true with no user_subscriptions row at all —
+	// Pro access granted by hand (direct DB edit / old seed) before the
+	// admin-grant feature existed, so it never got tracked as a proper
+	// grant. Give each one a real admin_grant row matching their current
+	// access exactly (same EndDate, same nil-EndDate-means-lifetime), so
+	// they show up in the "Granted Pro" shortlist — purely bookkeeping,
+	// nobody's actual access changes.
+	once(db, "backfill_orphan_pro_as_admin_grants", func() error {
+		var superAdmin domain.Admin
+		var grantedBy *uuid.UUID
+		if err := db.Where("role = ?", "super_admin").Order("created_at asc").First(&superAdmin).Error; err == nil {
+			grantedBy = &superAdmin.ID
+		}
+
+		var plan domain.SubscriptionPlan
+		if err := db.Order("duration_days desc").First(&plan).Error; err != nil {
+			log.Printf("[MIGRATION] backfill_orphan_pro_as_admin_grants: no subscription plan to attribute to, skipping: %v", err)
+			return nil
+		}
+
+		type orphanProUser struct {
+			ID        uuid.UUID
+			CreatedAt time.Time  `gorm:"column:created_at"`
+			ProExpiry *time.Time `gorm:"column:pro_expiry"`
+		}
+		var orphans []orphanProUser
+		if err := db.Raw(`
+			SELECT u.id, u.created_at, u.pro_expiry FROM users u
+			LEFT JOIN user_subscriptions us ON us.user_id = u.id
+			WHERE u.is_pro = true AND us.id IS NULL
+		`).Scan(&orphans).Error; err != nil {
+			return err
+		}
+
+		for _, u := range orphans {
+			sub := domain.UserSubscription{
+				UserID:      u.ID,
+				PlanID:      plan.ID,
+				Plan:        plan.Title,
+				Price:       0,
+				StartDate:   u.CreatedAt,
+				EndDate:     u.ProExpiry,
+				GrantedBy:   grantedBy,
+				GrantReason: "admin_grant",
+				Note:        "Backfilled: free Pro access predating the grant-tracking feature",
+			}
+			if sub.EndDate != nil {
+				g := sub.EndDate.AddDate(0, 0, domain.GraceDays)
+				sub.GraceEndsAt = &g
+			}
+			if err := db.Create(&sub).Error; err != nil {
+				log.Printf("[MIGRATION] backfill_orphan_pro_as_admin_grants: failed for user %s: %v", u.ID, err)
+			}
+		}
+		return nil
 	})
 
 	log.Println("[MIGRATION] Database migrations completed successfully")

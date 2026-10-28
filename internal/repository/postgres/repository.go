@@ -109,7 +109,15 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 			isContact := stmt.Schema != nil && (stmt.Schema.Table == "contacts" || stmt.Schema.Name == "EmergencyContact")
 			isUser := stmt.Schema != nil && (stmt.Schema.Table == "users" || stmt.Schema.Name == "User")
 
-			if isUser && (key == "batch_id" || key == "session_id" || key == "blood_group") {
+			if key == "has_blood_group" && stmt.Schema != nil && stmt.Schema.LookUpField("blood_group") != nil {
+				// Blood Bank donor listings: exclude students who never
+				// filled in a blood group instead of showing a blank badge.
+				if b, ok := value.(bool); ok && b {
+					db = db.Where("blood_group IS NOT NULL AND blood_group <> ''")
+				} else {
+					db = db.Where("(blood_group IS NULL OR blood_group = '')")
+				}
+			} else if isUser && (key == "batch_id" || key == "session_id" || key == "blood_group") {
 				// These live on the linked Student row, not on users — filter
 				// through it so the admin Users page can narrow by batch/session.
 				db = db.Where("users.id IN (SELECT user_id FROM students WHERE "+key+" = ? AND deleted_at IS NULL)", value)
@@ -234,7 +242,7 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 			if !ok {
 				continue
 			}
-			
+
 			if (u.Role == domain.RoleStudent && u.Student == nil) ||
 				(u.Role == domain.RoleTeacher && u.Teacher == nil) {
 				if u.Email != "" {
@@ -257,7 +265,7 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 			r.DB.WithContext(ctx).Where("LOWER(email) IN ?", lowerEmails).
 				Preload("Batch").Preload("Session").
 				Find(&students)
-			
+
 			for _, s := range students {
 				emailLower := strings.ToLower(s.Email)
 				if idx, ok := userMap[emailLower]; ok {
@@ -274,7 +282,7 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 			r.DB.WithContext(ctx).Where("LOWER(email) IN ?", lowerEmails).
 				Preload("Department").Preload("University").
 				Find(&teachers)
-				
+
 			for _, t := range teachers {
 				emailLower := strings.ToLower(t.Email)
 				if idx, ok := userMap[emailLower]; ok {

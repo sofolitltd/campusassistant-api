@@ -31,15 +31,20 @@ const (
 // address edit/delete never mutates order history.
 type Order struct {
 	Base
-	BuyerID               uuid.UUID     `gorm:"type:uuid;not null;index" json:"buyer_id"`
-	ShippingRecipientName string        `gorm:"size:255;not null" json:"shipping_recipient_name"`
-	ShippingPhone         string        `gorm:"size:20;not null" json:"shipping_phone"`
-	ShippingAddressLine   string        `gorm:"size:500;not null" json:"shipping_address_line"`
-	ShippingCity          string        `gorm:"size:100;not null" json:"shipping_city"`
-	TotalAmount           int           `gorm:"not null" json:"total_amount"` // poisha
-	Status                OrderStatus   `gorm:"type:varchar(20);default:'pending_payment';index" json:"status"`
-	PaymentMethod         PaymentMethod `gorm:"type:varchar(20);default:'bkash'" json:"payment_method"`
-	Items                 []OrderItem   `gorm:"foreignKey:OrderID;constraint:OnDelete:CASCADE" json:"items,omitempty"`
+	BuyerID               uuid.UUID `gorm:"type:uuid;not null;index" json:"buyer_id"`
+	ShippingRecipientName string    `gorm:"size:255;not null" json:"shipping_recipient_name"`
+	ShippingPhone         string    `gorm:"size:20;not null" json:"shipping_phone"`
+	ShippingAddressLine   string    `gorm:"size:500;not null" json:"shipping_address_line"`
+	ShippingCity          string    `gorm:"size:100;not null" json:"shipping_city"`
+	// DeliveryCharge is the sum of each distinct merchant's delivery fee for
+	// this order (one charge per merchant represented in Items, not per
+	// item), snapshotted at checkout from Merchant.DeliveryChargeInside/
+	// Outside — see OrderHandler.Checkout. Already included in TotalAmount.
+	DeliveryCharge int           `gorm:"default:0" json:"delivery_charge"`
+	TotalAmount    int           `gorm:"not null" json:"total_amount"` // poisha
+	Status         OrderStatus   `gorm:"type:varchar(20);default:'pending_payment';index" json:"status"`
+	PaymentMethod  PaymentMethod `gorm:"type:varchar(20);default:'bkash'" json:"payment_method"`
+	Items          []OrderItem   `gorm:"foreignKey:OrderID;constraint:OnDelete:CASCADE" json:"items,omitempty"`
 	// Events is the status timeline (oldest first). Only loaded by GetByID.
 	Events []OrderEvent `gorm:"foreignKey:OrderID" json:"events,omitempty"`
 }
