@@ -22,6 +22,7 @@ func JWTMiddleware(jwtManager *auth.JWTManager, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, err := Authenticate(c, jwtManager, db)
 		if err != nil {
+			c.Set("auth_error", err.Message)
 			c.AbortWithStatusJSON(err.Status, gin.H{"error": err.Message})
 			return
 		}

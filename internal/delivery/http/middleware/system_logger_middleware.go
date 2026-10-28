@@ -23,6 +23,19 @@ import (
 // telegramClient may be nil (alerts disabled). Only genuine server errors
 // (status >= 500) page admins on Telegram — 4xx is routine client misuse and
 // would be noise at request volume.
+//
+// A natural access-token expiry or a token invalidated by logout-all/
+// logout-others on another device is not a bug — it's the normal token
+// lifecycle, and the client already silently refreshes and retries on it
+// (see api_client.dart). Devices like /devices/heartbeat fire every 2
+// minutes per active user, so without this filter these two cases alone
+// dominate the error log and bury real signal (was ~9.5k/week on
+// /api/v1/devices before this filter).
+var benignAuthMessages = map[string]bool{
+	"Token has expired":                   true,
+	"Session expired, please login again": true,
+}
+
 func SystemLogger(db *gorm.DB, telegramClient *telegram.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -35,8 +48,15 @@ func SystemLogger(db *gorm.DB, telegramClient *telegram.Client) gin.HandlerFunc 
 			return
 		}
 
+		authErr, _ := c.Get("auth_error")
+		if authMsg, ok := authErr.(string); ok && status == 401 && benignAuthMessages[authMsg] {
+			return
+		}
+
 		message := ""
-		if len(c.Errors) > 0 {
+		if authMsg, ok := authErr.(string); ok {
+			message = authMsg
+		} else if len(c.Errors) > 0 {
 			message = c.Errors.String()
 		}
 
