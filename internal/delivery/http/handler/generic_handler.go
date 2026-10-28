@@ -104,7 +104,7 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 	// Add boolean filters (only "true"/"false" are honoured). is_claimed
 	// splits each profile pool into "claimed" (has a linked account) vs
 	// "unclaimed" (still needs a claim-code email) for the admin dashboard.
-	boolFilters := []string{"is_active", "is_verified", "is_pro", "is_claimed"}
+	boolFilters := []string{"is_active", "is_verified", "is_pro", "is_claimed", "has_blood_group"}
 	for _, f := range boolFilters {
 		if val, err := strconv.ParseBool(c.Query(f)); err == nil {
 			filter[f] = val

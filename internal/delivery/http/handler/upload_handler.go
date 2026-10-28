@@ -56,12 +56,26 @@ var restrictedUploadFolders = map[string]uploadRule{
 			"image/webp": true,
 		},
 	},
+	// The app client-side compresses avatars under 100KB before uploading
+	// (see EditProfilePage._compressAvatarBytes) — this is the backend half
+	// of that guarantee, since client compression alone isn't enforceable.
+	"avatars": {
+		maxBytes: 100 << 10,
+		types: map[string]bool{
+			"image/jpeg": true,
+			"image/png":  true,
+			"image/webp": true,
+		},
+	},
 }
 
 // checkUploadRule validates a file against its folder's rule. The type comes
 // from the file's first bytes, not the client-supplied Content-Type or name.
 func checkUploadRule(rule uploadRule, file *multipart.FileHeader) error {
 	if file.Size > rule.maxBytes {
+		if rule.maxBytes < 1<<20 {
+			return fmt.Errorf("file must be %d KB or smaller", rule.maxBytes>>10)
+		}
 		return fmt.Errorf("file must be %d MB or smaller", rule.maxBytes>>20)
 	}
 	f, err := file.Open()
