@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"campusassistant-api/internal/audit"
 	"campusassistant-api/internal/domain"
 
 	"github.com/gin-gonic/gin"
@@ -255,9 +256,14 @@ func (h *AccessGrantHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid id"})
 		return
 	}
+	var before domain.AccessGrant
+	found := h.db.WithContext(c.Request.Context()).First(&before, "id = ?", id).Error == nil
 	if err := h.db.WithContext(c.Request.Context()).Delete(&domain.AccessGrant{}, "id = ?", id).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete access grant"})
 		return
+	}
+	if found {
+		audit.RecordRequest(c, h.db, eventFor(c, "delete", &before, map[string]any{"deleted": before}))
 	}
 	// A JSON body, not 204: the admin client always parses the response.
 	c.JSON(http.StatusOK, gin.H{"deleted": true})

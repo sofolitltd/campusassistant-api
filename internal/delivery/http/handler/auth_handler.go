@@ -340,10 +340,38 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	// Get user from database
+	// Admin accounts use a separate table from application users but share
+	// the same refresh-token endpoint.
 	var user domain.User
 	if err := h.db.First(&user, userID).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+			return
+		}
+
+		admin, adminErr := h.adminRepo.FindByID(userID)
+		if errors.Is(adminErr, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Account not found"})
+			return
+		}
+		if adminErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+			return
+		}
+		if !admin.IsActive {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Account is deactivated"})
+			return
+		}
+
+		accessToken, err := h.jwtManager.GenerateAccessToken(admin.ID, admin.Email, admin.Role, nil, nil, 1)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate access token"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"access_token": accessToken,
+			"expires_in":   int64(h.accessTokenExpiry * 60),
+		})
 		return
 	}
 

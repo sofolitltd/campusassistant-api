@@ -228,6 +228,51 @@ type AdminPayment struct {
 	CreatedAt time.Time  `json:"created_at"`
 }
 
+type SubscriptionAttempt struct {
+	ID        uuid.UUID `json:"id"`
+	PaymentID string    `json:"payment_id"`
+	TrxID     string    `json:"trx_id"`
+	Amount    int       `json:"amount"`
+	Status    string    `json:"status"`
+	UserID    uuid.UUID `json:"user_id"`
+	UserEmail string    `json:"user_email"`
+	FirstName string    `json:"first_name"`
+	LastName  string    `json:"last_name"`
+	Phone     string    `json:"phone"`
+	PlanTitle string    `json:"plan_title"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ListSubscriptionAttempts returns payment attempts that may need follow-up.
+func (b *BillingService) ListSubscriptionAttempts(ctx context.Context, status string, limit, offset int) ([]SubscriptionAttempt, int64, error) {
+	query := b.db.WithContext(ctx).Table("bkash_transactions AS t").
+		Select("t.id, t.payment_id, t.trx_id, t.amount, t.status, t.user_id, u.email AS user_email, u.first_name, u.last_name, u.phone, p.title AS plan_title, t.created_at").
+		Joins("LEFT JOIN users u ON u.id = t.user_id").
+		Joins("LEFT JOIN subscription_plans p ON p.id = t.plan_id")
+
+	switch status {
+	case "", "unresolved":
+		query = query.Where("t.status IN ?", []domain.BkashTransactionStatus{
+			domain.BkashStatusFailed,
+			domain.BkashStatusCancelled,
+			domain.BkashStatusNeedsReview,
+		})
+	case "initiated", "failed", "cancelled", "needs_review":
+		query = query.Where("t.status = ?", status)
+	}
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return nil, 0, err
+	}
+
+	rows := []SubscriptionAttempt{}
+	if err := query.Order("t.created_at DESC").Limit(limit).Offset(offset).Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, count, nil
+}
+
 // ListPayments lists bKash payments of both kinds for the admin payments
 // screen, newest first, optionally filtered by status (e.g. needs_review).
 func (b *BillingService) ListPayments(ctx context.Context, status string, limit, offset int) ([]AdminPayment, error) {

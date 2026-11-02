@@ -67,6 +67,25 @@ var restrictedUploadFolders = map[string]uploadRule{
 			"image/webp": true,
 		},
 	},
+	// Batch cover photos: the admin crops to 1280x720 WebP under ~150KB
+	// (lib/image-helper.ts compressBatchCover); 300KB leaves headroom.
+	domain.BatchUploadFolder: {
+		maxBytes: 300 << 10,
+		types: map[string]bool{
+			"image/jpeg": true,
+			"image/webp": true,
+		},
+	},
+	// The app compresses feedback screenshots to ~300KB JPEGs before
+	// uploading; 1MB leaves headroom while still rejecting raw photos.
+	domain.FeedbackUploadFolder: {
+		maxBytes: 1 << 20,
+		types: map[string]bool{
+			"image/jpeg": true,
+			"image/png":  true,
+			"image/webp": true,
+		},
+	},
 }
 
 // checkUploadRule validates a file against its folder's rule. The type comes

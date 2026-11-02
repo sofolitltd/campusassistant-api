@@ -118,7 +118,7 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 	// Add boolean filters (only "true"/"false" are honoured). is_claimed
 	// splits each profile pool into "claimed" (has a linked account) vs
 	// "unclaimed" (still needs a claim-code email) for the admin dashboard.
-	boolFilters := []string{"is_active", "is_verified", "is_pro", "is_claimed", "has_blood_group"}
+	boolFilters := []string{"is_active", "is_verified", "is_pro", "is_claimed", "has_blood_group", "is_regular"}
 	for _, f := range boolFilters {
 		if val, err := strconv.ParseBool(c.Query(f)); err == nil {
 			filter[f] = val
@@ -226,11 +226,14 @@ func (h *GenericHandler[T]) Delete(c *gin.Context) {
 
 	before, _ := h.Usecase.GetByID(c.Request.Context(), id)
 	if c.Query("permanent") == "true" {
+		if !requireSuperAdmin(c) {
+			return
+		}
 		if err := h.Usecase.HardDelete(c.Request.Context(), id); err != nil {
 			c.JSON(deleteErrorStatus(err), gin.H{"error": err.Error()})
 			return
 		}
-		h.recordDelete(c, before)
+		h.recordDelete(c, before, true)
 		c.JSON(http.StatusOK, gin.H{"message": "Deleted permanently"})
 		return
 	}
@@ -240,15 +243,35 @@ func (h *GenericHandler[T]) Delete(c *gin.Context) {
 		return
 	}
 
-	h.recordDelete(c, before)
+	h.recordDelete(c, before, false)
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted successfully"})
 }
 
-func (h *GenericHandler[T]) recordDelete(c *gin.Context, entity *T) {
+func (h *GenericHandler[T]) recordDelete(c *gin.Context, entity *T, permanent bool) {
 	if h.DB == nil || entity == nil {
 		return
 	}
-	audit.RecordRequest(c, h.DB, eventFor(c, "delete", entity, map[string]any{"deleted": entity}))
+	audit.RecordRequest(c, h.DB, eventFor(c, deleteAction(permanent), entity, map[string]any{"deleted": entity}))
+}
+
+// deleteAction names a delete in the audit log: "delete" is a soft delete
+// (restorable from the Trash), "purge" a permanent one.
+func deleteAction(permanent bool) string {
+	if permanent {
+		return "purge"
+	}
+	return "delete"
+}
+
+// requireSuperAdmin answers 403 unless the caller is a super admin. Permanent
+// deletes can't be undone (files are removed too), so only super admins may
+// run them; everyone else soft-deletes and the row stays in the Trash.
+func requireSuperAdmin(c *gin.Context) bool {
+	if role, _ := c.Get("user_role"); role == "super_admin" {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "Only a super admin can permanently delete. Soft delete instead; it can be restored from the Trash."})
+	return false
 }
 
 func eventFor[T any](c *gin.Context, action string, entity *T, changes any) audit.Event {
@@ -298,12 +321,14 @@ func (h *GenericHandler[T]) HardDelete(c *gin.Context) {
 		return
 	}
 
+	// No super-admin check: this backs user-owned rows with no restore value
+	// (bookmarks), not dashboard deletes — those go through Delete.
 	before, _ := h.Usecase.GetByID(c.Request.Context(), id)
 	if err := h.Usecase.HardDelete(c.Request.Context(), id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	h.recordDelete(c, before)
+	h.recordDelete(c, before, true)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted permanently"})
 }

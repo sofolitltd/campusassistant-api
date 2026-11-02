@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -102,12 +103,18 @@ func (h *DeviceHandler) Heartbeat(c *gin.Context) {
 
 	userID := c.MustGet("user_id").(uuid.UUID)
 
-	if err := h.db.WithContext(c.Request.Context()).
+	result := h.db.WithContext(c.Request.Context()).
 		Model(&domain.UserDevice{}).
 		Where("user_id = ? AND fcm_token = ?", userID, req.FCMToken).
-		UpdateColumn("last_seen_at", time.Now()).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		UpdateColumn("last_seen_at", time.Now())
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": result.Error.Error()})
 		return
+	}
+	if result.RowsAffected > 0 {
+		if err := RecordDailyActive(c.Request.Context(), h.db, userID); err != nil {
+			log.Printf("[analytics] failed to record app activity for %s: %v", userID, err)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "ok"})

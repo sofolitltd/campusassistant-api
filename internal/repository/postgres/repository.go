@@ -32,10 +32,39 @@ func (r *GormRepository[T]) GetByID(ctx context.Context, id uuid.UUID) (*T, erro
 	var entity T
 	// Assumes the entity struct has a field named "ID" or similar mapping.
 	// GORM handles this well if the ID is the primary key.
-	if err := r.DB.WithContext(ctx).Preload(clause.Associations).First(&entity, "id = ?", id).Error; err != nil {
+	db, err := preloadAssociations(r.DB.WithContext(ctx), &entity)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.First(&entity, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
 	return &entity, nil
+}
+
+func preloadAssociations(db *gorm.DB, entity any) (*gorm.DB, error) {
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(entity); err != nil {
+		return nil, err
+	}
+
+	db = db.Preload(clause.Associations)
+	if stmt.Schema == nil {
+		return db, nil
+	}
+
+	switch {
+	case stmt.Schema.Table == "users" || stmt.Schema.Name == "User":
+		db = db.Preload("Student").Preload("Teacher")
+		db = db.Preload("Student.Batch").Preload("Student.Session")
+		db = db.Preload("Teacher.Department").Preload("Teacher.University")
+	case stmt.Schema.Table == "universities" || stmt.Schema.Name == "University":
+		db = db.Preload("Departments")
+	case stmt.Schema.Name == "Alumni":
+		db = db.Preload("StudentProfile").Preload("StudentProfile.User").Preload("StudentProfile.Batch").Preload("OrganizationRef")
+	}
+
+	return db, nil
 }
 
 func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interface{}, limit, offset int) ([]T, int64, error) {
@@ -196,21 +225,10 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 	_ = stmt.Parse(&t)
 
 	if shouldPreload {
-		db = db.Preload(clause.Associations)
-		if stmt.Schema != nil {
-			if stmt.Schema.Table == "users" || stmt.Schema.Name == "User" {
-				// Explicitly preload student/teacher profiles for User model
-				db = db.Preload("Student").Preload("Teacher")
-				// Also preload one level deeper for student/teacher details if they exist
-				db = db.Preload("Student.Batch").Preload("Student.Session")
-				db = db.Preload("Teacher.Department").Preload("Teacher.University")
-			} else if stmt.Schema.Table == "universities" || stmt.Schema.Name == "University" {
-				// Explicitly preload Departments for Universities
-				db = db.Preload("Departments")
-			} else if stmt.Schema.Name == "Alumni" {
-				// Explicitly preload StudentProfile and its nested User/Batch for Alumni
-				db = db.Preload("StudentProfile").Preload("StudentProfile.User").Preload("StudentProfile.Batch").Preload("OrganizationRef")
-			}
+		var preloadErr error
+		db, preloadErr = preloadAssociations(db, &t)
+		if preloadErr != nil {
+			return nil, 0, preloadErr
 		}
 	}
 

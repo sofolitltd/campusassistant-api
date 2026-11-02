@@ -197,6 +197,13 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	auditLogHandler := handler.NewAuditLogHandler(db)
 	v1.GET("/audit-logs", guard.Require(middleware.AdminJWT), auditLogHandler.List)
 
+	analyticsHandler := handler.NewAnalyticsHandler(db)
+	analyticsGroup := v1.Group("/analytics")
+	{
+		analyticsGroup.POST("/events", guard.Require(middleware.AuthJWT), analyticsHandler.SubmitEvent)
+		analyticsGroup.GET("/dashboard", guard.Require(middleware.AdminJWT), analyticsHandler.Dashboard)
+	}
+
 	// Helper to register generic routes
 	registerRoutes[domain.University](v1, db, "universities", guard, middleware.Access{Read: middleware.Public, Write: middleware.AdminJWT})
 	registerRoutes[domain.Faculty](v1, db, "faculties", guard, middleware.Access{Read: middleware.Public, Write: middleware.AdminJWT})
@@ -225,6 +232,9 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	studentRepo := postgres.NewGormRepositoryWithOrder[domain.Student](db, "weight ASC, LEFT(student_id, 2) DESC, student_id ASC")
 	studentUsecase := usecase.NewGenericUsecase(studentRepo)
 	studentHandler := handler.NewStudentHandler(studentUsecase, db, mail)
+	// Honors → Masters moves; see EnrollmentHandler.
+	enrollmentHandler := handler.NewEnrollmentHandler(db)
+	v1.POST("/batches/:id/promote", guard.Require(middleware.AdminJWT), enrollmentHandler.Promote)
 	studentGroup := v1.Group("/students")
 	{
 		studentGroup.POST("", guard.Require(middleware.AdminJWT), studentHandler.Create)
@@ -237,6 +247,8 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		studentGroup.POST("/:id/generate-code", guard.Require(middleware.AdminJWT), studentHandler.GenerateCode)
 		studentGroup.PUT("/:id", guard.Require(middleware.AdminJWT), studentHandler.Update)
 		studentGroup.DELETE("/:id", guard.Require(middleware.AdminJWT), studentHandler.Delete)
+		studentGroup.GET("/:id/enrollments", guard.Require(middleware.AdminJWT), enrollmentHandler.ListForStudent)
+		studentGroup.POST("/:id/enrollments/:enrollmentId/revert", guard.Require(middleware.AdminJWT), enrollmentHandler.Revert)
 	}
 
 	// Self-service profile routes — JWT gated, resolve "self" from the
@@ -279,6 +291,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		myStudentGroup.GET("", studentHandler.GetMyStudent)
 		myStudentGroup.PUT("", studentHandler.UpdateMyStudent)
 		myStudentGroup.PUT("/address", studentHandler.UpdateMyAddress)
+		myStudentGroup.GET("/enrollments", enrollmentHandler.ListMine)
 	}
 
 	teacherRepo := postgres.NewGormRepositoryWithOrder[domain.Teacher](db, "weight ASC, name ASC")
@@ -934,6 +947,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		billingAdminGroup.PUT("/payouts/:id/paid", billingHandler.AdminMarkPayoutPaid)
 		billingAdminGroup.PUT("/payouts/:id/reject", billingHandler.AdminRejectPayout)
 		billingAdminGroup.GET("/payments", billingHandler.AdminListPayments)
+		billingAdminGroup.GET("/subscription-attempts", billingHandler.AdminSubscriptionAttempts)
 		billingAdminGroup.GET("/refunds", billingHandler.AdminListRefunds)
 		billingAdminGroup.POST("/refunds/subscription", billingHandler.AdminRefundSubscription)
 		billingAdminGroup.POST("/refunds/order", billingHandler.AdminRefundOrder)
@@ -965,7 +979,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	// Feedback Routes
 	feedbackRepo := postgres.NewFeedbackRepository(db)
-	feedbackHandler := handler.NewFeedbackHandler(feedbackRepo)
+	feedbackHandler := handler.NewFeedbackHandler(feedbackRepo, telegramClient)
 	feedbackGroup := v1.Group("/feedback")
 	feedbackGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
@@ -1058,6 +1072,18 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	notificationHandler := handler.NewNotificationHandler(db, notificationService, notifHub)
 
 	// Admin notification endpoints — API key only (inherited from v1 group)
+	// Trash: soft-deleted rows across the dashboard. Listing and restore are
+	// for any admin; purge re-checks for super admin inside the handler.
+	trashHandler := handler.NewTrashHandler(db, r2)
+	trashGroup := v1.Group("/admin/trash")
+	{
+		trashGroup.GET("", guard.Require(middleware.AdminJWT), trashHandler.List)
+		trashGroup.GET("/summary", guard.Require(middleware.AdminJWT), trashHandler.Summary)
+		trashGroup.GET("/types", guard.Require(middleware.AdminJWT), trashHandler.Types)
+		trashGroup.POST("/:type/:id/restore", guard.Require(middleware.AdminJWT), trashHandler.Restore)
+		trashGroup.DELETE("/:type/:id", guard.Require(middleware.AdminJWT), trashHandler.Purge)
+	}
+
 	adminNotifGroup := v1.Group("/admin/notifications")
 	{
 		adminNotifGroup.GET("", guard.Require(middleware.AdminJWT), notificationHandler.GetAllAdminNotifications)

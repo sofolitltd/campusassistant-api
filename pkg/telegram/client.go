@@ -44,35 +44,73 @@ func New(cfg *config.Config) *Client {
 // handle (or ignore) — this is a best-effort admin notification, never a
 // condition that should fail the request that triggered it.
 func (c *Client) SendMessage(ctx context.Context, text string) error {
-	if c.botToken == "" || c.chatID == "" {
+	if !c.configured() {
 		log.Printf("[telegram] (not configured) would send: %s", text)
 		return nil
 	}
-
-	body, err := json.Marshal(map[string]string{
+	return c.call(ctx, "sendMessage", map[string]any{
 		"chat_id": c.chatID,
 		"text":    text,
 	})
+}
+
+// SendPhotos posts images by public URL — Telegram fetches them itself, so
+// the URLs must be reachable from the internet. One URL goes out as a
+// single photo; 2–10 as an album. Extra URLs beyond 10 are dropped.
+func (c *Client) SendPhotos(ctx context.Context, urls []string) error {
+	if len(urls) == 0 {
+		return nil
+	}
+	if !c.configured() {
+		log.Printf("[telegram] (not configured) would send %d photo(s)", len(urls))
+		return nil
+	}
+	if len(urls) == 1 {
+		return c.call(ctx, "sendPhoto", map[string]any{
+			"chat_id": c.chatID,
+			"photo":   urls[0],
+		})
+	}
+	if len(urls) > 10 {
+		urls = urls[:10]
+	}
+	media := make([]map[string]string, len(urls))
+	for i, u := range urls {
+		media[i] = map[string]string{"type": "photo", "media": u}
+	}
+	return c.call(ctx, "sendMediaGroup", map[string]any{
+		"chat_id": c.chatID,
+		"media":   media,
+	})
+}
+
+func (c *Client) configured() bool {
+	return c.botToken != "" && c.chatID != ""
+}
+
+// call POSTs a JSON payload to a Bot API method.
+func (c *Client) call(ctx context.Context, method string, payload map[string]any) error {
+	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("telegram: encode send message request: %w", err)
+		return fmt.Errorf("telegram: encode %s request: %w", method, err)
 	}
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", c.botToken)
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/%s", c.botToken, method)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("telegram: build send message request: %w", err)
+		return fmt.Errorf("telegram: build %s request: %w", method, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("telegram: send message request failed: %w", err)
+		return fmt.Errorf("telegram: %s request failed: %w", method, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("telegram: send message returned %d: %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("telegram: %s returned %d: %s", method, resp.StatusCode, string(respBody))
 	}
 	return nil
 }

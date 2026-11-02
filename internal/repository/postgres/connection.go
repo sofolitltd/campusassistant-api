@@ -161,6 +161,8 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.Attachment{},
 		&domain.Hall{},
 		&domain.AuditLog{},
+		&domain.StudentEnrollment{},
+		&domain.AnalyticsEvent{},
 		&domain.SystemLog{},
 		&domain.EmailLog{},
 		&domain.Notification{},

@@ -41,6 +41,13 @@ type Student struct {
 	// as Association.DistrictID/SubDistrictID.
 	PresentAddress   *datatypes.JSON `gorm:"type:jsonb" json:"present_address,omitempty"`
 	PermanentAddress *datatypes.JSON `gorm:"type:jsonb" json:"permanent_address,omitempty"`
+
+	// Set only on rows listed through a batch's history (GET /students
+	// ?batch_id=X&include_history=true): the student has since moved to
+	// CurrentBatchID, and the row shows them as they were in batch X (that
+	// enrollment's roll, session, CR and regular). Never stored.
+	HistoryEnrollmentID *uuid.UUID `gorm:"-" json:"history_enrollment_id,omitempty"`
+	CurrentBatchID      *uuid.UUID `gorm:"-" json:"current_batch_id,omitempty"`
 }
 
 // StudentAddressInfo is the shape stored inside Student.PresentAddress /

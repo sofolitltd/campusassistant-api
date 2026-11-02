@@ -200,3 +200,50 @@ func TestListPayments_FiltersByStatusAcrossBothKinds(t *testing.T) {
 		t.Fatalf("pagination returned %d rows, want 1", len(page))
 	}
 }
+
+func TestListSubscriptionAttemptsIncludesContactAndUnresolvedStatuses(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	u := e.user(t)
+	u.FirstName, u.LastName, u.Phone = "Sam", "User", "+8801700000000"
+	if err := e.db.Save(&u).Error; err != nil {
+		t.Fatal(err)
+	}
+	plan := e.plan(t, 100, 30, false)
+
+	for _, status := range []domain.BkashTransactionStatus{
+		domain.BkashStatusFailed,
+		domain.BkashStatusCancelled,
+		domain.BkashStatusNeedsReview,
+		domain.BkashStatusInitiated,
+		domain.BkashStatusCompleted,
+	} {
+		if err := e.db.Create(&domain.BkashTransaction{
+			UserID: u.ID, PlanID: plan.ID, PaymentID: uuid.NewString(),
+			Amount: 100, Status: status,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rows, total, err := e.billing.ListSubscriptionAttempts(ctx, "unresolved", 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 || len(rows) != 3 {
+		t.Fatalf("unresolved attempts = %d (count %d), want 3", len(rows), total)
+	}
+	for _, row := range rows {
+		if row.UserEmail != u.Email || row.FirstName != u.FirstName || row.LastName != u.LastName || row.Phone != u.Phone {
+			t.Fatalf("attempt contact details = %+v, want the user's current contact details", row)
+		}
+	}
+
+	rows, total, err = e.billing.ListSubscriptionAttempts(ctx, "failed", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(rows) != 1 || rows[0].Status != string(domain.BkashStatusFailed) {
+		t.Fatalf("failed filter = %+v, count %d; want one failed attempt", rows, total)
+	}
+}

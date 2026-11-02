@@ -47,9 +47,24 @@ Recorded by an admin in the dashboard (Billing → Payments → Refund) **after*
 - Works for `completed` and `needs_review` payments. Idempotent (`already refunded` → 409). Cash-on-delivery orders are cancelled, not refunded.
 - Endpoints (admin): `GET /billing/payments?status=`, `GET /billing/refunds`, `POST /billing/refunds/{subscription|order}` with `{id, reference, reason}` (`id` = payment row for subscriptions, order id for orders).
 
+## Subscription recovery
+
+The server stores each checkout session in `bkash_transactions`. Failed and
+cancelled checkouts are retained there, and payment attempts requiring manual
+review are marked `needs_review`. The Admin Subscription Recovery page reads
+these existing records and joins current user contact details; no additional
+tracking table or migration is needed.
+
+- `GET /billing/subscription-attempts?status=unresolved&limit=25&offset=0`
+- `status` may be `unresolved` (failed, cancelled, and needs-review), `failed`,
+  `cancelled`, `needs_review`, or `initiated`.
+- The endpoint is admin-only and returns user email/phone, plan, amount,
+  checkout status, and timestamp. Completed subscription payments remain
+  available under Billing → Payments.
+
 ## Admin dashboard
 
-`/billing` in campusassistant-admin: Overview, Payments (refund), Payouts (mark paid / reject), Refunds, Ledger, Invoices, Entitlements (per-plan editor).
+`/billing` in campusassistant-admin: Overview, Payments (refund), Payouts (mark paid / reject), Refunds, Ledger, Invoices, Entitlements (per-plan editor). `/billing/subscription-recovery` lists unresolved subscription checkouts with direct email/phone contact links and user profiles.
 
 ## Entitlements
 

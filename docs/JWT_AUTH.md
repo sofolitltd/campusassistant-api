@@ -64,7 +64,7 @@ All under `/api/v1/auth` (`internal/delivery/http/router.go`, handlers in
 | `POST /register` | `email, password (min 8), first_name, last_name, phone, gender, university_id, department_id` (`role` is accepted but ignored — always created as `student`) | `201` `AuthResponse{access_token, refresh_token, user, expires_in}` |
 | `POST /login` | `email, password` | `200` `AuthResponse` (user loaded with Student/Teacher/Staff relations) |
 | `POST /admin-login` | `email, password` | `200` `{access_token, refresh_token, expires_in, admin:{id,email,name,role}}` — checks the `admins` table, not `users` |
-| `POST /refresh` | `refresh_token` | `200` `{access_token, expires_in}` — no new refresh token is issued |
+| `POST /refresh` | `refresh_token` | `200` `{access_token, expires_in}` for either a user or an admin — no new refresh token is issued |
 | `POST /forgot-password` | `email, account_type ("user"\|"admin", default "user")` | `200` generic message always (enumeration-safe); rate-limited per-IP and per-email |
 | `POST /verify-reset-code` | `email, account_type, code (6 digits)` | `200` `{reset_token, expires_in}` — opaque random token, **not** a JWT, stored SHA-256-hashed |
 | `POST /reset-password` | `email, account_type, reset_token, new_password` | `200` message. For `user` accounts this bumps `token_version`, invalidating every existing session; `admins` have no `token_version` so existing admin sessions survive a reset |

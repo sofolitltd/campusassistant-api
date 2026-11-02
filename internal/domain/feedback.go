@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 type FeedbackCategory string
@@ -16,6 +17,12 @@ const (
 	FeedbackComplaint  FeedbackCategory = "complaint"
 	FeedbackGeneral    FeedbackCategory = "general"
 )
+
+// FeedbackMaxImages caps how many screenshots one feedback can carry.
+const FeedbackMaxImages = 4
+
+// FeedbackUploadFolder is the /upload folder the app sends screenshots to.
+const FeedbackUploadFolder = "feedback"
 
 type FeedbackStatus string
 
@@ -33,6 +40,7 @@ type Feedback struct {
 	Subject       string           `gorm:"size:200;not null" json:"subject"`
 	Message       string           `gorm:"type:text;not null" json:"message"`
 	AttachmentURL string           `gorm:"size:500" json:"attachment_url,omitempty"`
+	ImageURLs     pq.StringArray   `gorm:"type:text[];default:'{}'" json:"image_urls"`
 	Status        FeedbackStatus   `gorm:"type:varchar(20);default:'pending';index" json:"status"`
 	AdminReply    string           `gorm:"type:text" json:"admin_reply,omitempty"`
 	RepliedAt     *time.Time       `json:"replied_at,omitempty"`

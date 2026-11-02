@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"campusassistant-api/internal/audit"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
 
@@ -159,9 +160,14 @@ func (h *ExamNoticeHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID format"})
 		return
 	}
+	var before domain.ExamNotice
+	found := h.db.First(&before, "id = ?", id).Error == nil
 	if err := h.db.Delete(&domain.ExamNotice{}, "id = ?", id).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete exam notice"})
 		return
+	}
+	if found {
+		audit.RecordRequest(c, h.db, eventFor(c, "delete", &before, map[string]any{"deleted": before}))
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
 }

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/json"
 	"fmt"
 	netHTTP "net/http"
 	"net/http/httptest"
@@ -333,5 +334,52 @@ func TestRouter_ProxyOnlyFetchesFromStorageBucket(t *testing.T) {
 		if w.Code != netHTTP.StatusBadRequest {
 			t.Errorf("proxy %q: got %d, want 400", target, w.Code)
 		}
+	}
+}
+
+func TestRouter_AdminRefreshToken(t *testing.T) {
+	e := newRouterEnv(t)
+	refreshToken, err := e.jwt.GenerateRefreshToken(e.adminID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(netHTTP.MethodPost, "/api/v1/auth/refresh", strings.NewReader(fmt.Sprintf(`{"refresh_token":%q}`, refreshToken)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "test-key")
+	response := httptest.NewRecorder()
+	e.r.ServeHTTP(response, request)
+
+	if response.Code != netHTTP.StatusOK {
+		t.Fatalf("admin refresh returned %d: %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.AccessToken == "" || body.ExpiresIn != 60*60 {
+		t.Fatalf("unexpected refresh response: %+v", body)
+	}
+	claims, err := e.jwt.ValidateToken(body.AccessToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.UserID != e.adminID || claims.Role != "admin" {
+		t.Fatalf("refreshed token claims = (%s, %q), want (%s, admin)", claims.UserID, claims.Role, e.adminID)
+	}
+
+	if err := e.db(t).Model(&domain.Admin{}).Where("id = ?", e.adminID).Update("is_active", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(netHTTP.MethodPost, "/api/v1/auth/refresh", strings.NewReader(fmt.Sprintf(`{"refresh_token":%q}`, refreshToken)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-API-Key", "test-key")
+	response = httptest.NewRecorder()
+	e.r.ServeHTTP(response, request)
+	if response.Code != netHTTP.StatusUnauthorized {
+		t.Fatalf("inactive admin refresh returned %d, want 401: %s", response.Code, response.Body.String())
 	}
 }

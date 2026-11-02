@@ -158,6 +158,9 @@ func (h *ResourceHandler) Delete(c *gin.Context) {
 	}
 
 	if c.Query("permanent") == "true" {
+		if !requireSuperAdmin(c) {
+			return
+		}
 		resource, err := h.Usecase.GetByID(c.Request.Context(), id)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
@@ -170,6 +173,7 @@ func (h *ResourceHandler) Delete(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		audit.RecordRequest(c, h.db, eventFor(c, "purge", resource, map[string]any{"deleted": resource}))
 
 		if h.storage != nil {
 			if resource.FileURL != "" {
@@ -186,9 +190,13 @@ func (h *ResourceHandler) Delete(c *gin.Context) {
 
 		c.JSON(http.StatusOK, gin.H{"message": "Permanently deleted"})
 	} else {
+		before, _ := h.Usecase.GetByID(c.Request.Context(), id)
 		if err := h.Usecase.Delete(c.Request.Context(), id); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
+		}
+		if before != nil {
+			audit.RecordRequest(c, h.db, eventFor(c, "delete", before, map[string]any{"deleted": before}))
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "Deleted successfully"})
 	}

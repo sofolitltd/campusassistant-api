@@ -295,6 +295,24 @@ func (h *BillingHandler) AdminListPayments(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"payments": rows})
 }
 
+func (h *BillingHandler) AdminSubscriptionAttempts(c *gin.Context) {
+	status := c.DefaultQuery("status", "unresolved")
+	switch status {
+	case "unresolved", "initiated", "failed", "cancelled", "needs_review":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subscription attempt status"})
+		return
+	}
+
+	limit, offset := pageParams(c)
+	rows, count, err := h.billing.ListSubscriptionAttempts(c.Request.Context(), status, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load subscription attempts"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"attempts": rows, "count": count, "limit": limit, "offset": offset})
+}
+
 func (h *BillingHandler) AdminListRefunds(c *gin.Context) {
 	limit, offset := pageParams(c)
 	rows, total, err := h.billing.ListRefunds(c.Request.Context(), limit, offset)
