@@ -44,6 +44,14 @@ func (h *UserHandler) UpdateMyUser(c *gin.Context) {
 		return
 	}
 
+	// A verified user's name is their certificate name, confirmed at claim
+	// time — only an admin can change it after that.
+	if user.IsVerified &&
+		((req.FirstName != "" && req.FirstName != user.FirstName) ||
+			(req.LastName != "" && req.LastName != user.LastName)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Your name is verified and can't be changed here. Contact your CR or admin to correct it."})
+		return
+	}
 	if req.FirstName != "" {
 		user.FirstName = req.FirstName
 	}

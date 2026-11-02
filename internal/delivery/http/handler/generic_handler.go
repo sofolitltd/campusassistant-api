@@ -1,20 +1,28 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"campusassistant-api/internal/audit"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/usecase"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type GenericHandler[T any] struct {
-	Usecase usecase.Usecase[T]
+	Usecase       usecase.Usecase[T]
+	DB            *gorm.DB
+	BeforeRespond func(c *gin.Context, entity *T)
+	// AfterUpdate, when set, runs after a successful Update with the record
+	// as it was before the request and as saved.
+	AfterUpdate func(c *gin.Context, before T, after *T)
 }
 
 func NewGenericHandler[T any](u usecase.Usecase[T]) *GenericHandler[T] {
@@ -47,6 +55,9 @@ func (h *GenericHandler[T]) Create(c *gin.Context) {
 		return
 	}
 
+	if h.DB != nil {
+		audit.RecordRequest(c, h.DB, eventFor(c, "create", &entity, map[string]any{"created": &entity}))
+	}
 	c.JSON(http.StatusCreated, entity)
 }
 
@@ -64,6 +75,9 @@ func (h *GenericHandler[T]) GetByID(c *gin.Context) {
 		return
 	}
 
+	if h.BeforeRespond != nil {
+		h.BeforeRespond(c, entity)
+	}
 	c.JSON(http.StatusOK, entity)
 }
 
@@ -141,6 +155,11 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 		return
 	}
 
+	if h.BeforeRespond != nil {
+		for i := range entities {
+			h.BeforeRespond(c, &entities[i])
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"data":   entities,
 		"count":  count,
@@ -163,6 +182,7 @@ func (h *GenericHandler[T]) Update(c *gin.Context) {
 		return
 	}
 
+	before := *existing
 	if err := c.ShouldBindJSON(existing); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -185,6 +205,13 @@ func (h *GenericHandler[T]) Update(c *gin.Context) {
 		return
 	}
 
+	if h.DB != nil {
+		audit.RecordRequest(c, h.DB, eventFor(c, "update", existing, audit.Diff(before, existing)))
+	}
+	if h.AfterUpdate != nil {
+		h.AfterUpdate(c, before, existing)
+	}
+
 	c.JSON(http.StatusOK, existing)
 }
 
@@ -197,11 +224,13 @@ func (h *GenericHandler[T]) Delete(c *gin.Context) {
 		return
 	}
 
+	before, _ := h.Usecase.GetByID(c.Request.Context(), id)
 	if c.Query("permanent") == "true" {
 		if err := h.Usecase.HardDelete(c.Request.Context(), id); err != nil {
 			c.JSON(deleteErrorStatus(err), gin.H{"error": err.Error()})
 			return
 		}
+		h.recordDelete(c, before)
 		c.JSON(http.StatusOK, gin.H{"message": "Deleted permanently"})
 		return
 	}
@@ -211,7 +240,45 @@ func (h *GenericHandler[T]) Delete(c *gin.Context) {
 		return
 	}
 
+	h.recordDelete(c, before)
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted successfully"})
+}
+
+func (h *GenericHandler[T]) recordDelete(c *gin.Context, entity *T) {
+	if h.DB == nil || entity == nil {
+		return
+	}
+	audit.RecordRequest(c, h.DB, eventFor(c, "delete", entity, map[string]any{"deleted": entity}))
+}
+
+func eventFor[T any](c *gin.Context, action string, entity *T, changes any) audit.Event {
+	event := audit.Event{
+		Action:     audit.EntityName(entity) + "." + action,
+		EntityType: audit.EntityName(entity),
+		Changes:    changes,
+	}
+	if auditable, ok := any(entity).(domain.Entity); ok {
+		event.EntityID = auditable.GetID()
+	}
+	var fields map[string]json.RawMessage
+	if data, err := json.Marshal(entity); err == nil && json.Unmarshal(data, &fields) == nil {
+		parseScope := func(key string) *uuid.UUID {
+			raw := fields[key]
+			var value string
+			if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
+				return nil
+			}
+			id, err := uuid.Parse(value)
+			if err != nil || id == uuid.Nil {
+				return nil
+			}
+			return &id
+		}
+		event.UniversityID = parseScope("university_id")
+		event.DepartmentID = parseScope("department_id")
+		event.BatchID = parseScope("batch_id")
+	}
+	return audit.FromRequest(c, event)
 }
 
 // deleteErrorStatus answers 409 when a repository refused the delete because
@@ -231,10 +298,12 @@ func (h *GenericHandler[T]) HardDelete(c *gin.Context) {
 		return
 	}
 
+	before, _ := h.Usecase.GetByID(c.Request.Context(), id)
 	if err := h.Usecase.HardDelete(c.Request.Context(), id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.recordDelete(c, before)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted permanently"})
 }

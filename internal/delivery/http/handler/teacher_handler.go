@@ -17,10 +17,20 @@ type TeacherHandler struct {
 }
 
 func NewTeacherHandler(u usecase.Usecase[domain.Teacher], db *gorm.DB) *TeacherHandler {
-	return &TeacherHandler{
+	h := &TeacherHandler{
 		GenericHandler: NewGenericHandler(u),
 		db:             db,
 	}
+	h.GenericHandler.DB = db
+	h.BeforeRespond = func(c *gin.Context, teacher *domain.Teacher) {
+		if !callerIsAdmin(c) {
+			teacher.VerificationCode = ""
+		}
+	}
+	h.AfterUpdate = func(c *gin.Context, before domain.Teacher, after *domain.Teacher) {
+		syncLinkedUserName(c, db, after.UserID, before.Name, after.Name)
+	}
+	return h
 }
 
 func (h *TeacherHandler) Create(c *gin.Context) {
@@ -74,6 +84,7 @@ func (h *TeacherHandler) VerifyCode(c *gin.Context) {
 		return
 	}
 
+	teachers[0].VerificationCode = ""
 	c.JSON(http.StatusOK, teachers[0])
 }
 
@@ -110,6 +121,7 @@ func (h *TeacherHandler) ClaimProfile(c *gin.Context) {
 	) {
 		return
 	}
+	teacher.VerificationCode = ""
 	c.JSON(http.StatusOK, teacher)
 }
 
@@ -135,5 +147,6 @@ func (h *TeacherHandler) GetMyTeacher(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Teacher profile not found"})
 		return
 	}
+	teacher.VerificationCode = ""
 	c.JSON(http.StatusOK, teacher)
 }

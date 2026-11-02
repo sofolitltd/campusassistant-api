@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"campusassistant-api/internal/audit"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
 
@@ -17,10 +18,11 @@ import (
 type SubscriptionHandler struct {
 	repo     domain.SubscriptionRepository
 	payments *service.PaymentService
+	db       *gorm.DB
 }
 
-func NewSubscriptionHandler(repo domain.SubscriptionRepository, payments *service.PaymentService) *SubscriptionHandler {
-	return &SubscriptionHandler{repo: repo, payments: payments}
+func NewSubscriptionHandler(repo domain.SubscriptionRepository, payments *service.PaymentService, db *gorm.DB) *SubscriptionHandler {
+	return &SubscriptionHandler{repo: repo, payments: payments, db: db}
 }
 
 type adminGrantProRequest struct {
@@ -50,6 +52,11 @@ func (h *SubscriptionHandler) AdminGrantPro(c *gin.Context) {
 		return
 	}
 
+	audit.RecordRequest(c, h.db, audit.Event{
+		Action: "subscription.grant", EntityType: "user_subscription", EntityID: sub.ID,
+		Reason:  req.Note,
+		Changes: map[string]any{"user_id": req.UserID, "plan_id": req.PlanID},
+	})
 	c.JSON(http.StatusOK, sub)
 }
 

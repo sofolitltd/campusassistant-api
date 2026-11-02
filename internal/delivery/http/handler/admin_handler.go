@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"campusassistant-api/internal/audit"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/repository/postgres"
 	"campusassistant-api/pkg/auth"
@@ -9,14 +10,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type AdminHandler struct {
 	adminRepo *postgres.AdminRepository
+	db        *gorm.DB
 }
 
-func NewAdminHandler(adminRepo *postgres.AdminRepository) *AdminHandler {
-	return &AdminHandler{adminRepo: adminRepo}
+func NewAdminHandler(adminRepo *postgres.AdminRepository, db *gorm.DB) *AdminHandler {
+	return &AdminHandler{adminRepo: adminRepo, db: db}
 }
 
 type CreateAdminRequest struct {
@@ -80,6 +83,10 @@ func (h *AdminHandler) Create(c *gin.Context) {
 		return
 	}
 
+	audit.RecordRequest(c, h.db, audit.Event{
+		Action: "admin.create", EntityType: "admin", EntityID: admin.ID,
+		Changes: map[string]any{"email": admin.Email, "name": admin.Name, "role": admin.Role},
+	})
 	c.JSON(http.StatusCreated, gin.H{
 		"id":     admin.ID,
 		"email":  admin.Email,
@@ -101,7 +108,8 @@ func (h *AdminHandler) Update(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.adminRepo.FindByID(id); err != nil {
+	before, err := h.adminRepo.FindByID(id)
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Admin not found"})
 		return
 	}
@@ -119,7 +127,15 @@ func (h *AdminHandler) Update(c *gin.Context) {
 		}
 	}
 
-	admin, _ := h.adminRepo.FindByID(id)
+	admin, err := h.adminRepo.FindByID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Admin was updated but could not be reloaded"})
+		return
+	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		Action: "admin.update", EntityType: "admin", EntityID: id,
+		Changes: audit.Diff(before, admin),
+	})
 	c.JSON(http.StatusOK, admin)
 }
 
@@ -186,5 +202,9 @@ func (h *AdminHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	audit.RecordRequest(c, h.db, audit.Event{
+		Action: "admin.deactivate", EntityType: "admin", EntityID: admin.ID,
+		Changes: map[string]any{"is_active": [2]any{admin.IsActive, false}, "email": admin.Email},
+	})
 	c.JSON(http.StatusOK, gin.H{"message": "Admin deleted successfully"})
 }

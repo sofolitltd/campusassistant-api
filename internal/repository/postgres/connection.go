@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -152,6 +153,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.Teacher{},
 		&domain.Staff{},
 		&domain.CR{},
+		&domain.Moderator{},
 		&domain.Verification{},
 		&domain.Resource{},
 		&domain.ResourceRating{},
@@ -252,6 +254,44 @@ func RunMigrations(db *gorm.DB) error {
 	if err != nil {
 		return fmt.Errorf("AutoMigrate failed: %w", err)
 	}
+
+	once(db, "backfill_moderators_from_crs", func() error {
+		var currentCRs []domain.CR
+		if err := db.Scopes(domain.ActiveCR).Find(&currentCRs).Error; err != nil {
+			return err
+		}
+		for _, cr := range currentCRs {
+			userID := cr.UserID
+			if userID == nil && cr.TargetStudentID != nil {
+				var student domain.Student
+				if err := db.Select("user_id").First(&student, "id = ?", *cr.TargetStudentID).Error; err == nil {
+					userID = student.UserID
+				} else if err != gorm.ErrRecordNotFound {
+					return err
+				}
+			}
+			if userID == nil || cr.BatchID == uuid.Nil {
+				continue
+			}
+			departmentID := cr.DepartmentID
+			moderator := domain.Moderator{
+				UserID:       *userID,
+				ScopeType:    domain.ModeratorScopeBatch,
+				ScopeID:      cr.BatchID,
+				UniversityID: cr.UniversityID,
+				DepartmentID: &departmentID,
+				TermStart:    cr.TermStart,
+				TermEnd:      cr.TermEnd,
+				IsActive:     true,
+				GrantedBy:    nil,
+				Note:         "backfilled from CR",
+			}
+			if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&moderator).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 
 	// Drop legacy columns from earlier schema iterations
 	once(db, "drop_message_deleted_by_user", func() error {
@@ -456,6 +496,62 @@ func RunMigrations(db *gorm.DB) error {
 			}
 		}
 		return nil
+	})
+
+	// Sessions used to be scoped to a university/department, so the same
+	// period ("2019-2020") was a separate row per department. They are now
+	// one global row per period (see domain.Session); batches decide which
+	// sessions apply to a department. Backfill the new structured columns,
+	// merge rows for the same period (repointing students, verification
+	// requests and batch links — soft-deleted rows included, since the
+	// earlier slug dedupe soft-deleted rows without repointing them), drop
+	// the old scope columns, guard uniqueness, and seed academic years.
+	once(db, "globalize_sessions", func() error {
+		return db.Transaction(func(tx *gorm.DB) error {
+			for _, stmt := range []string{
+				`DROP INDEX IF EXISTS idx_sessions_dept_slug_active`,
+				`UPDATE sessions SET kind = 'academic_year', term = '',
+					start_year = CAST(SUBSTRING(name FROM 1 FOR 4) AS INTEGER)
+				WHERE start_year = 0 AND name ~ '^\d{4}-\d{4}$'`,
+				`UPDATE sessions SET name = start_year || '-' || (start_year + 1), sort_key = start_year * 10
+				WHERE kind = 'academic_year'`,
+				`CREATE TEMP TABLE session_merge ON COMMIT DROP AS
+				SELECT id AS old_id, FIRST_VALUE(id) OVER (
+					PARTITION BY kind, start_year, term
+					ORDER BY (deleted_at IS NOT NULL), created_at, id
+				) AS keep_id
+				FROM sessions`,
+				`DELETE FROM session_merge WHERE old_id = keep_id`,
+				`UPDATE students s SET session_id = m.keep_id FROM session_merge m WHERE s.session_id = m.old_id`,
+				`UPDATE student_verification_requests v SET session_id = m.keep_id FROM session_merge m WHERE v.session_id = m.old_id`,
+				`INSERT INTO batch_sessions (batch_id, session_id)
+				SELECT bs.batch_id, m.keep_id FROM batch_sessions bs JOIN session_merge m ON bs.session_id = m.old_id
+				ON CONFLICT DO NOTHING`,
+				`DELETE FROM batch_sessions bs USING session_merge m WHERE bs.session_id = m.old_id`,
+				`DELETE FROM sessions s USING session_merge m WHERE s.id = m.old_id`,
+				// Every remaining row is the canonical one for its period;
+				// a soft-deleted one may still be referenced, so restore it.
+				`UPDATE sessions SET deleted_at = NULL WHERE deleted_at IS NOT NULL`,
+				`ALTER TABLE sessions
+					DROP COLUMN IF EXISTS slug,
+					DROP COLUMN IF EXISTS university_id,
+					DROP COLUMN IF EXISTS department_id,
+					DROP COLUMN IF EXISTS is_active`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_period_active ON sessions (kind, start_year, term) WHERE deleted_at IS NULL`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_name_active ON sessions (name) WHERE deleted_at IS NULL`,
+			} {
+				if err := tx.Exec(stmt).Error; err != nil {
+					return err
+				}
+			}
+			for year := 1990; year <= 2030; year++ {
+				s := domain.Session{Kind: domain.SessionKindAcademicYear, StartYear: year}
+				if err := tx.Where("kind = ? AND start_year = ? AND term = ''", s.Kind, year).FirstOrCreate(&s).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 	})
 
 	log.Println("[MIGRATION] Database migrations completed successfully")

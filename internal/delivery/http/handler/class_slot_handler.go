@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"campusassistant-api/internal/audit"
+	"campusassistant-api/internal/authz"
 	"campusassistant-api/internal/domain"
 
 	"github.com/gin-gonic/gin"
@@ -24,21 +26,29 @@ func NewClassSlotHandler(db *gorm.DB) *ClassSlotHandler {
 	return &ClassSlotHandler{db: db}
 }
 
-func (h *ClassSlotHandler) activeCRBatch(userID, departmentID uuid.UUID) (cr domain.CR, ok bool) {
-	err := h.db.Scopes(domain.ActiveCR, domain.CRsOf(userID)).
-		Where("department_id = ?", departmentID).
-		First(&cr).Error
-	return cr, err == nil
-}
-
-// authorize decides whether the caller may write to (department, batch).
-func (h *ClassSlotHandler) authorize(c *gin.Context, departmentID, batchID uuid.UUID) bool {
+// authorize decides whether the caller may write to a batch, deriving its
+// department and university from the database instead of trusting the request.
+func (h *ClassSlotHandler) authorize(c *gin.Context, universityID, departmentID, batchID uuid.UUID) bool {
 	if callerIsAdmin(c) {
 		return true
 	}
-	cr, isCR := h.activeCRBatch(callerID(c), departmentID)
-	if !isCR || cr.BatchID != batchID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only the current CR of this batch can manage its class schedule"})
+	var batch domain.Batch
+	if err := h.db.WithContext(c.Request.Context()).First(&batch, "id = ?", batchID).Error; err != nil ||
+		batch.DepartmentID != departmentID || batch.UniversityID != universityID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Batch does not belong to this department and university"})
+		return false
+	}
+	allowed, err := authz.Can(c.Request.Context(), h.db, authz.Actor{UserID: callerID(c)}, authz.ClassSlotsManage, authz.Target{
+		UniversityID: batch.UniversityID,
+		DepartmentID: batch.DepartmentID,
+		BatchID:      batch.ID,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify moderator permissions"})
+		return false
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You cannot manage this batch's class schedule"})
 		return false
 	}
 	return true
@@ -104,7 +114,7 @@ func (h *ClassSlotHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 		return
 	}
-	if !h.authorize(c, in.DepartmentID, in.BatchID) {
+	if !h.authorize(c, in.UniversityID, in.DepartmentID, in.BatchID) {
 		return
 	}
 	s := domain.ClassSlot{
@@ -124,6 +134,12 @@ func (h *ClassSlotHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create class slot"})
 		return
 	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		ViaRole: moderatorAuditRole(c, h.db, s.UniversityID, s.DepartmentID, s.BatchID),
+		Action:  "class_slot.create", EntityType: "class_slot", EntityID: s.ID,
+		UniversityID: &s.UniversityID, DepartmentID: &s.DepartmentID, BatchID: &s.BatchID,
+		Changes: map[string]any{"created": s},
+	})
 	c.JSON(http.StatusCreated, s)
 }
 
@@ -138,7 +154,7 @@ func (h *ClassSlotHandler) load(c *gin.Context) (domain.ClassSlot, bool) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
 		return s, false
 	}
-	if !h.authorize(c, s.DepartmentID, s.BatchID) {
+	if !h.authorize(c, s.UniversityID, s.DepartmentID, s.BatchID) {
 		return s, false
 	}
 	return s, true
@@ -158,6 +174,7 @@ func (h *ClassSlotHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 		return
 	}
+	before := s
 	// Scope (university/department/batch) is immutable after creation.
 	s.DayOfWeek, s.CourseName, s.Teacher = in.DayOfWeek, in.CourseName, in.Teacher
 	s.Room, s.StartTime, s.EndTime = in.Room, in.StartTime, in.EndTime
@@ -166,6 +183,12 @@ func (h *ClassSlotHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update class slot"})
 		return
 	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		ViaRole: moderatorAuditRole(c, h.db, s.UniversityID, s.DepartmentID, s.BatchID),
+		Action:  "class_slot.update", EntityType: "class_slot", EntityID: s.ID,
+		UniversityID: &s.UniversityID, DepartmentID: &s.DepartmentID, BatchID: &s.BatchID,
+		Changes: audit.Diff(before, s),
+	})
 	c.JSON(http.StatusOK, s)
 }
 
@@ -178,6 +201,12 @@ func (h *ClassSlotHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete class slot"})
 		return
 	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		ViaRole: moderatorAuditRole(c, h.db, s.UniversityID, s.DepartmentID, s.BatchID),
+		Action:  "class_slot.delete", EntityType: "class_slot", EntityID: s.ID,
+		UniversityID: &s.UniversityID, DepartmentID: &s.DepartmentID, BatchID: &s.BatchID,
+		Changes: map[string]any{"deleted": s},
+	})
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
 }
 
@@ -255,7 +284,7 @@ func (h *ClassSlotHandler) SetStatus(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Class slot not found"})
 		return
 	}
-	if !h.authorize(c, slot.DepartmentID, slot.BatchID) {
+	if !h.authorize(c, slot.UniversityID, slot.DepartmentID, slot.BatchID) {
 		return
 	}
 
@@ -270,12 +299,19 @@ func (h *ClassSlotHandler) SetStatus(c *gin.Context) {
 	}
 	var existing domain.ClassSlotStatus
 	if err := h.db.Where("class_slot_id = ? AND date = ?", in.ClassSlotID, date).First(&existing).Error; err == nil {
+		before := existing
 		status.Base = existing.Base
 		status.SetUpdatedBy(callerID(c))
 		if err := h.db.Save(&status).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update class status"})
 			return
 		}
+		audit.RecordRequest(c, h.db, audit.Event{
+			ViaRole: moderatorAuditRole(c, h.db, slot.UniversityID, slot.DepartmentID, slot.BatchID),
+			Action:  "class_slot_status.update", EntityType: "class_slot_status", EntityID: status.ID,
+			UniversityID: &slot.UniversityID, DepartmentID: &slot.DepartmentID, BatchID: &slot.BatchID,
+			Changes: audit.Diff(before, status),
+		})
 	} else {
 		status.SetCreatedBy(callerID(c))
 		status.SetUpdatedBy(callerID(c))
@@ -283,6 +319,12 @@ func (h *ClassSlotHandler) SetStatus(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create class status"})
 			return
 		}
+		audit.RecordRequest(c, h.db, audit.Event{
+			ViaRole: moderatorAuditRole(c, h.db, slot.UniversityID, slot.DepartmentID, slot.BatchID),
+			Action:  "class_slot_status.create", EntityType: "class_slot_status", EntityID: status.ID,
+			UniversityID: &slot.UniversityID, DepartmentID: &slot.DepartmentID, BatchID: &slot.BatchID,
+			Changes: map[string]any{"created": status},
+		})
 	}
 	c.JSON(http.StatusOK, status)
 }
@@ -304,12 +346,18 @@ func (h *ClassSlotHandler) DeleteStatus(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Class slot not found"})
 		return
 	}
-	if !h.authorize(c, slot.DepartmentID, slot.BatchID) {
+	if !h.authorize(c, slot.UniversityID, slot.DepartmentID, slot.BatchID) {
 		return
 	}
 	if err := h.db.Delete(&status).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete class status"})
 		return
 	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		ViaRole: moderatorAuditRole(c, h.db, slot.UniversityID, slot.DepartmentID, slot.BatchID),
+		Action:  "class_slot_status.delete", EntityType: "class_slot_status", EntityID: status.ID,
+		UniversityID: &slot.UniversityID, DepartmentID: &slot.DepartmentID, BatchID: &slot.BatchID,
+		Changes: map[string]any{"deleted": status},
+	})
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
 }

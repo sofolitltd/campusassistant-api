@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"campusassistant-api/internal/audit"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/repository/postgres"
 	"campusassistant-api/internal/service"
@@ -129,7 +130,31 @@ func (h *StudentVerificationHandler) Submit(c *gin.Context) {
 		return
 	}
 	h.notifyTelegram(v)
+	h.notifyModerators(c.Request.Context(), v)
 	c.JSON(http.StatusCreated, v)
+}
+
+func (h *StudentVerificationHandler) notifyModerators(ctx context.Context, v *domain.StudentVerificationRequest) {
+	data, err := service.ModeratorNotificationData("/moderation/verifications/" + v.ID.String())
+	if err != nil {
+		log.Printf("[student_verification] failed to prepare moderator notification: %v", err)
+		return
+	}
+	message := domain.Notification{
+		Title: "New verification request",
+		Body:  fmt.Sprintf("%s submitted a student verification request.", v.Name),
+		Type:  "moderation",
+		Scope: "user",
+		Data:  data,
+	}
+	err = service.NotifyModerators(ctx, h.db, h.notificationSvc, message, []service.ModeratorNotificationScope{
+		{Type: domain.ModeratorScopeBatch, ID: v.BatchID},
+		{Type: domain.ModeratorScopeDepartment, ID: v.DepartmentID},
+		{Type: domain.ModeratorScopeUniversity, ID: v.UniversityID},
+	}, v.UserID)
+	if err != nil {
+		log.Printf("[student_verification] failed to notify moderators: %v", err)
+	}
 }
 
 // notifyTelegram pings the admin Telegram chat about a new submission. Fired
@@ -166,9 +191,8 @@ func (h *StudentVerificationHandler) validatePlacement(c *gin.Context, req submi
 	if err := db.First(&batch, "id = ?", req.BatchID).Error; err != nil || batch.DepartmentID != req.DepartmentID {
 		return "Selected batch does not belong to the selected department"
 	}
-	var session domain.Session
-	if err := db.First(&session, "id = ?", req.SessionID).Error; err != nil || session.UniversityID != req.UniversityID {
-		return "Selected session does not belong to the selected university"
+	if ok, err := domain.BatchHasSession(db, req.BatchID, req.SessionID); err != nil || !ok {
+		return "Selected session does not belong to the selected batch"
 	}
 	return ""
 }
@@ -382,14 +406,36 @@ func (h *StudentVerificationHandler) Approve(c *gin.Context) {
 
 		v.Status = domain.StudentVerificationApproved
 		v.RejectionReason = ""
+		v.Escalated = false
 		v.ReviewedByID = reviewerID
 		v.ReviewedAt = &now
 		v.LinkedStudentID = &student.ID
-		return tx.Model(&v).Select("status", "rejection_reason", "reviewed_by_id", "reviewed_at", "linked_student_id").Updates(&v).Error
+		return tx.Model(&v).Select("status", "rejection_reason", "escalated", "reviewed_by_id", "reviewed_at", "linked_student_id").Updates(&v).Error
 	})
 	if err != nil {
 		var re *reviewError
 		if errors.As(err, &re) {
+			if moderatorReview, _ := c.Get("moderator_review"); moderatorReview == true &&
+				(re.message == "This user is already linked to a student profile" ||
+					re.message == "This roll is already claimed by another account") {
+				update := h.db.WithContext(c.Request.Context()).Model(&domain.StudentVerificationRequest{}).
+					Where("id = ? AND status = ?", id, domain.StudentVerificationPending).
+					Update("escalated", true)
+				if update.Error != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to escalate the conflicting request"})
+					return
+				}
+				if update.RowsAffected > 0 {
+					audit.RecordRequest(c, h.db, audit.Event{
+						ViaRole: moderatorAuditRole(c, h.db, v.UniversityID, v.DepartmentID, v.BatchID),
+						Action:  "verification.escalate", EntityType: "student_verification_request",
+						EntityID: id, UniversityID: &v.UniversityID, DepartmentID: &v.DepartmentID, BatchID: &v.BatchID,
+						Changes: map[string]any{"escalated": [2]any{false, true}},
+					})
+					c.JSON(http.StatusAccepted, gin.H{"message": "Sent to admin", "escalated": true})
+					return
+				}
+			}
 			c.JSON(re.status, gin.H{"error": re.message})
 			return
 		}
@@ -397,6 +443,12 @@ func (h *StudentVerificationHandler) Approve(c *gin.Context) {
 		return
 	}
 
+	audit.RecordRequest(c, h.db, audit.Event{
+		ViaRole: moderatorAuditRole(c, h.db, v.UniversityID, v.DepartmentID, v.BatchID),
+		Action:  "verification.approve", EntityType: "student_verification_request",
+		EntityID: v.ID, UniversityID: &v.UniversityID, DepartmentID: &v.DepartmentID, BatchID: &v.BatchID,
+		Changes: map[string]any{"status": [2]any{domain.StudentVerificationPending, domain.StudentVerificationApproved}},
+	})
 	h.notifyStatus(c, &v)
 	c.JSON(http.StatusOK, v)
 }
@@ -424,6 +476,7 @@ func (h *StudentVerificationHandler) Reject(c *gin.Context) {
 		Updates(map[string]interface{}{
 			"status":           domain.StudentVerificationRejected,
 			"rejection_reason": body.Reason,
+			"escalated":        false,
 			"reviewed_by_id":   reviewerFromContext(c),
 			"reviewed_at":      now,
 		})
@@ -441,6 +494,13 @@ func (h *StudentVerificationHandler) Reject(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "Request rejected"})
 		return
 	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		ViaRole: moderatorAuditRole(c, h.db, v.UniversityID, v.DepartmentID, v.BatchID),
+		Action:  "verification.reject", EntityType: "student_verification_request",
+		EntityID: v.ID, UniversityID: &v.UniversityID, DepartmentID: &v.DepartmentID, BatchID: &v.BatchID,
+		Reason:  body.Reason,
+		Changes: map[string]any{"status": [2]any{domain.StudentVerificationPending, domain.StudentVerificationRejected}},
+	})
 	h.notifyStatus(c, v)
 	c.JSON(http.StatusOK, v)
 }

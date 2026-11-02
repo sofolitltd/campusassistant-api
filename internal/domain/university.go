@@ -23,5 +23,4 @@ type University struct {
 	WebsiteURL       string          `gorm:"size:255" json:"website_url"`
 	LogoURL          string          `json:"logo_url"`
 	Departments      []Department    `gorm:"foreignKey:UniversityID" json:"departments,omitempty"`
-	Sessions         []Session       `gorm:"foreignKey:UniversityID" json:"sessions,omitempty"`
 }

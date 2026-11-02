@@ -218,6 +218,11 @@ func (r *GormRepository[T]) GetAll(ctx context.Context, filter map[string]interf
 	if stmt.Schema != nil && (stmt.Schema.Table == "banners" || stmt.Schema.Table == "contacts") {
 		db = db.Preload("Targets")
 	}
+	// A batch's sessions are what scope a student's session choice (sessions
+	// themselves are global), so every batch list carries them, newest first.
+	if stmt.Schema != nil && stmt.Schema.Table == "batches" && !shouldPreload {
+		db = db.Preload("Sessions", func(tx *gorm.DB) *gorm.DB { return tx.Order("sessions.sort_key DESC") })
+	}
 
 	q := db.Limit(limit).Offset(offset)
 	if r.defaultOrder != "" {

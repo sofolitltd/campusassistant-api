@@ -72,8 +72,10 @@ type User struct {
 	SubscriptionStatus string `gorm:"-" json:"subscription_status"`
 
 	// IsCR is true while the user holds a current CR row (see ActiveCR). Not a
-	// DB column; the Flutter client reads it to show CR-only actions.
-	IsCR bool `gorm:"-" json:"is_cr"`
+	// DB column; deprecated compatibility alias for holding any active
+	// moderator role. The official CR directory no longer grants app powers.
+	IsCR           bool            `gorm:"-" json:"is_cr"`
+	ModeratorRoles []ModeratorRole `gorm:"-" json:"moderator_roles"`
 
 	// Perks from admin access grants (launch offers, ambassadors, …). Not a
 	// DB column; resolved in loadFullUser so the app can hide ads/coin costs.

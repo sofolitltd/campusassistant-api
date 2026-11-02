@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"campusassistant-api/internal/audit"
+	"campusassistant-api/internal/authz"
 	"campusassistant-api/internal/delivery/http/middleware"
 	"campusassistant-api/internal/domain"
 
@@ -14,9 +16,8 @@ import (
 )
 
 // ClassNoticeHandler serves batch-scoped class notices. Reads are open to any
-// signed-in user; writes are limited to admins and to the *current* CR of the
-// notice's own department + batch. The scope is enforced here from the
-// database, never from what the client claims.
+// signed-in user; writes are limited to admins and moderators with a matching
+// batch, department, or university assignment.
 type ClassNoticeHandler struct {
 	db *gorm.DB
 }
@@ -53,13 +54,6 @@ func (in *classNoticeInput) validate() string {
 
 // activeCRBatch returns the batch the user is currently CR of in the given
 // department, or false when they are not an active CR there.
-func (h *ClassNoticeHandler) activeCRBatch(userID, departmentID uuid.UUID) (cr domain.CR, ok bool) {
-	err := h.db.Scopes(domain.ActiveCR, domain.CRsOf(userID)).
-		Where("department_id = ?", departmentID).
-		First(&cr).Error
-	return cr, err == nil
-}
-
 func callerID(c *gin.Context) uuid.UUID {
 	id, _ := c.Get("user_id")
 	uid, _ := id.(uuid.UUID)
@@ -74,21 +68,35 @@ func callerIsAdmin(c *gin.Context) bool {
 
 // authorize decides whether the caller may write to (department, batch) and
 // returns the batch the notice must be pinned to.
-func (h *ClassNoticeHandler) authorize(c *gin.Context, departmentID uuid.UUID, requested *uuid.UUID) (batch *uuid.UUID, name string, ok bool) {
+func (h *ClassNoticeHandler) authorize(c *gin.Context, universityID, departmentID uuid.UUID, requested *uuid.UUID) (batch *uuid.UUID, name string, ok bool) {
 	if callerIsAdmin(c) {
 		return requested, "Admin", true
 	}
-	cr, isCR := h.activeCRBatch(callerID(c), departmentID)
-	if !isCR {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Only the current CR of this department can post class notices"})
+	if requested == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Moderators must select a batch"})
 		return nil, "", false
 	}
-	if requested != nil && *requested != cr.BatchID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "You can only post for your own batch"})
+	var targetBatch domain.Batch
+	if err := h.db.WithContext(c.Request.Context()).First(&targetBatch, "id = ?", *requested).Error; err != nil ||
+		targetBatch.DepartmentID != departmentID || targetBatch.UniversityID != universityID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Batch does not belong to this department and university"})
 		return nil, "", false
 	}
-	b := cr.BatchID
-	return &b, cr.Name, true
+	allowed, err := authz.Can(c.Request.Context(), h.db, authz.Actor{UserID: callerID(c)}, authz.ClassNoticesManage, authz.Target{
+		UniversityID: targetBatch.UniversityID,
+		DepartmentID: targetBatch.DepartmentID,
+		BatchID:      targetBatch.ID,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify moderator permissions"})
+		return nil, "", false
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You cannot manage notices for this batch"})
+		return nil, "", false
+	}
+	b := targetBatch.ID
+	return &b, "Moderator", true
 }
 
 // List returns non-expired notices for a department. With batch_id it returns
@@ -131,7 +139,7 @@ func (h *ClassNoticeHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 		return
 	}
-	batch, name, ok := h.authorize(c, in.DepartmentID, in.BatchID)
+	batch, name, ok := h.authorize(c, in.UniversityID, in.DepartmentID, in.BatchID)
 	if !ok {
 		return
 	}
@@ -153,6 +161,12 @@ func (h *ClassNoticeHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create class notice"})
 		return
 	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		ViaRole: moderatorAuditRole(c, h.db, n.UniversityID, n.DepartmentID, valueOrNil(n.BatchID)),
+		Action:  "class_notice.create", EntityType: "class_notice", EntityID: n.ID,
+		UniversityID: &n.UniversityID, DepartmentID: &n.DepartmentID, BatchID: n.BatchID,
+		Changes: map[string]any{"created": n},
+	})
 	c.JSON(http.StatusCreated, n)
 }
 
@@ -172,9 +186,19 @@ func (h *ClassNoticeHandler) load(c *gin.Context) (domain.ClassNotice, bool) {
 	if callerIsAdmin(c) {
 		return n, true
 	}
-	cr, isCR := h.activeCRBatch(callerID(c), n.DepartmentID)
-	if !isCR || n.BatchID == nil || *n.BatchID != cr.BatchID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "You can only manage notices of your own batch"})
+	if n.BatchID == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You cannot manage this department-wide notice"})
+		return n, false
+	}
+	allowed, err := authz.Can(c.Request.Context(), h.db, authz.Actor{UserID: callerID(c)}, authz.ClassNoticesManage, authz.Target{
+		UniversityID: n.UniversityID, DepartmentID: n.DepartmentID, BatchID: *n.BatchID,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify moderator permissions"})
+		return n, false
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You cannot manage notices for this batch"})
 		return n, false
 	}
 	return n, true
@@ -202,6 +226,12 @@ func (h *ClassNoticeHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update class notice"})
 		return
 	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		ViaRole: moderatorAuditRole(c, h.db, n.UniversityID, n.DepartmentID, valueOrNil(n.BatchID)),
+		Action:  "class_notice.update", EntityType: "class_notice", EntityID: n.ID,
+		UniversityID: &n.UniversityID, DepartmentID: &n.DepartmentID, BatchID: n.BatchID,
+		Changes: map[string]any{"updated": n},
+	})
 	c.JSON(http.StatusOK, n)
 }
 
@@ -214,5 +244,18 @@ func (h *ClassNoticeHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete class notice"})
 		return
 	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		ViaRole: moderatorAuditRole(c, h.db, n.UniversityID, n.DepartmentID, valueOrNil(n.BatchID)),
+		Action:  "class_notice.delete", EntityType: "class_notice", EntityID: n.ID,
+		UniversityID: &n.UniversityID, DepartmentID: &n.DepartmentID, BatchID: n.BatchID,
+		Changes: map[string]any{"deleted": n},
+	})
 	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
+}
+
+func valueOrNil(id *uuid.UUID) uuid.UUID {
+	if id == nil {
+		return uuid.Nil
+	}
+	return *id
 }

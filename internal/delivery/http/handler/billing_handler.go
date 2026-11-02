@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"strconv"
 
+	"campusassistant-api/internal/audit"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // BillingHandler serves invoices, merchant earnings/payouts and the admin
@@ -18,10 +20,11 @@ import (
 type BillingHandler struct {
 	billing      *service.BillingService
 	merchantRepo domain.MerchantRepository
+	db           *gorm.DB
 }
 
-func NewBillingHandler(billing *service.BillingService, merchantRepo domain.MerchantRepository) *BillingHandler {
-	return &BillingHandler{billing: billing, merchantRepo: merchantRepo}
+func NewBillingHandler(billing *service.BillingService, merchantRepo domain.MerchantRepository, db *gorm.DB) *BillingHandler {
+	return &BillingHandler{billing: billing, merchantRepo: merchantRepo, db: db}
 }
 
 func pageParams(c *gin.Context) (limit, offset int) {
@@ -308,7 +311,7 @@ type refundBody struct {
 	Reason    string    `json:"reason"`
 }
 
-func (h *BillingHandler) refund(c *gin.Context, fn func(adminID, id uuid.UUID, ref, reason string) (*domain.Refund, error)) {
+func (h *BillingHandler) refund(c *gin.Context, action string, fn func(adminID, id uuid.UUID, ref, reason string) (*domain.Refund, error)) {
 	var req refundBody
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "id and reference (the bKash refund transaction id) are required"})
@@ -328,17 +331,21 @@ func (h *BillingHandler) refund(c *gin.Context, fn func(adminID, id uuid.UUID, r
 		}
 		return
 	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		Action: action, EntityType: "refund", EntityID: r.ID, Reason: req.Reason,
+		Changes: map[string]any{"kind": r.Kind, "source_id": r.SourceID, "user_id": r.UserID, "amount": r.Amount},
+	})
 	c.JSON(http.StatusCreated, r)
 }
 
 func (h *BillingHandler) AdminRefundSubscription(c *gin.Context) {
-	h.refund(c, func(admin, id uuid.UUID, ref, reason string) (*domain.Refund, error) {
+	h.refund(c, "refund.subscription", func(admin, id uuid.UUID, ref, reason string) (*domain.Refund, error) {
 		return h.billing.RefundSubscriptionPayment(c.Request.Context(), admin, id, ref, reason)
 	})
 }
 
 func (h *BillingHandler) AdminRefundOrder(c *gin.Context) {
-	h.refund(c, func(admin, id uuid.UUID, ref, reason string) (*domain.Refund, error) {
+	h.refund(c, "refund.order", func(admin, id uuid.UUID, ref, reason string) (*domain.Refund, error) {
 		return h.billing.RefundOrder(c.Request.Context(), admin, id, ref, reason)
 	})
 }

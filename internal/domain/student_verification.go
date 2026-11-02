@@ -60,6 +60,7 @@ type StudentVerificationRequest struct {
 
 	Status          StudentVerificationStatus `gorm:"type:varchar(20);default:'pending';index" json:"status"`
 	RejectionReason string                    `gorm:"type:text" json:"rejection_reason,omitempty"`
+	Escalated       bool                      `gorm:"default:false;index" json:"escalated"`
 	ReviewedByID    *uuid.UUID                `gorm:"type:uuid" json:"reviewed_by_id,omitempty"`
 	ReviewedAt      *time.Time                `json:"reviewed_at,omitempty"`
 	LinkedStudentID *uuid.UUID                `gorm:"type:uuid" json:"linked_student_id,omitempty"`

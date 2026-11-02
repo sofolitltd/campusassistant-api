@@ -17,10 +17,20 @@ type StaffHandler struct {
 }
 
 func NewStaffHandler(u usecase.Usecase[domain.Staff], db *gorm.DB) *StaffHandler {
-	return &StaffHandler{
+	h := &StaffHandler{
 		GenericHandler: NewGenericHandler(u),
 		db:             db,
 	}
+	h.GenericHandler.DB = db
+	h.BeforeRespond = func(c *gin.Context, staff *domain.Staff) {
+		if !callerIsAdmin(c) {
+			staff.VerificationCode = ""
+		}
+	}
+	h.AfterUpdate = func(c *gin.Context, before domain.Staff, after *domain.Staff) {
+		syncLinkedUserName(c, db, after.UserID, before.Name, after.Name)
+	}
+	return h
 }
 
 func (h *StaffHandler) Create(c *gin.Context) {
@@ -74,6 +84,7 @@ func (h *StaffHandler) VerifyCode(c *gin.Context) {
 		return
 	}
 
+	staffs[0].VerificationCode = ""
 	c.JSON(http.StatusOK, staffs[0])
 }
 
@@ -110,6 +121,7 @@ func (h *StaffHandler) ClaimProfile(c *gin.Context) {
 	) {
 		return
 	}
+	staff.VerificationCode = ""
 	c.JSON(http.StatusOK, staff)
 }
 
@@ -135,5 +147,6 @@ func (h *StaffHandler) GetMyStaff(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Staff profile not found"})
 		return
 	}
+	staff.VerificationCode = ""
 	c.JSON(http.StatusOK, staff)
 }

@@ -141,6 +141,16 @@ func main() {
 				} else if notifRes.RowsAffected > 0 {
 					log.Printf("Background Worker: Cleaned up %d expired notification records.", notifRes.RowsAffected)
 				}
+
+				if time.Now().Day() == 1 {
+					auditCutoff := time.Now().AddDate(-2, 0, 0)
+					auditRes := db.Unscoped().Where("timestamp < ?", auditCutoff).Delete(&domain.AuditLog{})
+					if auditRes.Error != nil {
+						log.Printf("Background Worker Error: Failed to prune audit logs: %v", auditRes.Error)
+					} else if auditRes.RowsAffected > 0 {
+						log.Printf("Background Worker: Pruned %d audit logs older than two years.", auditRes.RowsAffected)
+					}
+				}
 			}
 		}
 	}()

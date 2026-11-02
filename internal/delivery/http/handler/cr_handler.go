@@ -1,21 +1,23 @@
 package handler
 
 import (
+	"campusassistant-api/internal/audit"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/usecase"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type CrHandler struct {
 	*GenericHandler[domain.CR]
 }
 
-func NewCrHandler(u usecase.Usecase[domain.CR]) *CrHandler {
-	return &CrHandler{
-		GenericHandler: NewGenericHandler(u),
-	}
+func NewCrHandler(u usecase.Usecase[domain.CR], db *gorm.DB) *CrHandler {
+	generic := NewGenericHandler(u)
+	generic.DB = db
+	return &CrHandler{GenericHandler: generic}
 }
 
 func (h *CrHandler) Create(c *gin.Context) {
@@ -30,5 +32,10 @@ func (h *CrHandler) Create(c *gin.Context) {
 		return
 	}
 
+	audit.RecordRequest(c, h.DB, audit.Event{
+		Action: "cr.create", EntityType: "cr", EntityID: cr.ID,
+		UniversityID: &cr.UniversityID, DepartmentID: &cr.DepartmentID, BatchID: &cr.BatchID,
+		Changes: map[string]any{"created": cr},
+	})
 	c.JSON(http.StatusCreated, cr)
 }

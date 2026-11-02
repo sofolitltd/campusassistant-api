@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"campusassistant-api/internal/audit"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
 	"campusassistant-api/internal/usecase"
@@ -29,8 +30,10 @@ type ResourceHandler struct {
 }
 
 func NewResourceHandler(u usecase.Usecase[domain.Resource], s *storage.R2Storage, db *gorm.DB, notificationService *service.NotificationService) *ResourceHandler {
+	generic := NewGenericHandler[domain.Resource](u)
+	generic.DB = db
 	return &ResourceHandler{
-		GenericHandler:      NewGenericHandler[domain.Resource](u),
+		GenericHandler:      generic,
 		Usecase:             u,
 		storage:             s,
 		db:                  db,
@@ -72,6 +75,27 @@ func (h *ResourceHandler) Create(c *gin.Context) {
 	if notify && resource.Status == domain.ResourceStatusPublished && len(batchIDs) > 0 {
 		if err := h.notifyBatches(c.Request.Context(), resource, batchIDs, adminID); err != nil {
 			log.Printf("[resource notify] failed to notify batches for resource %s: %v", resource.ID, err)
+		}
+	}
+	if resource.Status == domain.ResourceStatusPending {
+		data, err := service.ModeratorNotificationData("/moderation/resources?resource_id=" + resource.ID.String())
+		if err != nil {
+			log.Printf("[resource notify] failed to prepare moderator notification for resource %s: %v", resource.ID, err)
+		} else {
+			message := domain.Notification{
+				Title: "New resource awaiting review",
+				Body:  resource.Title,
+				Type:  "moderation",
+				Scope: "user",
+				Data:  data,
+			}
+			err = service.NotifyModerators(c.Request.Context(), h.db, h.notificationService, message, []service.ModeratorNotificationScope{
+				{Type: domain.ModeratorScopeDepartment, ID: resource.DepartmentID},
+				{Type: domain.ModeratorScopeUniversity, ID: resource.UniversityID},
+			}, resource.CreatedByID)
+			if err != nil {
+				log.Printf("[resource notify] failed to notify moderators for resource %s: %v", resource.ID, err)
+			}
 		}
 	}
 
@@ -214,6 +238,12 @@ func (h *ResourceHandler) ApproveResource(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		ViaRole: moderatorAuditRole(c, h.db, resource.UniversityID, resource.DepartmentID, uuid.Nil),
+		Action:  "resource.approve", EntityType: "resource", EntityID: resource.ID,
+		UniversityID: &resource.UniversityID, DepartmentID: &resource.DepartmentID,
+		Changes: map[string]any{"status": [2]any{domain.ResourceStatusPending, domain.ResourceStatusPublished}},
+	})
 
 	// TODO: FCM — send push notification to resource.CreatedByID
 	// notificationService.SendToUser(resource.CreatedByID, "Your submission was approved!", resource.Title)
@@ -266,6 +296,13 @@ func (h *ResourceHandler) RejectResource(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	audit.RecordRequest(c, h.db, audit.Event{
+		ViaRole: moderatorAuditRole(c, h.db, resource.UniversityID, resource.DepartmentID, uuid.Nil),
+		Action:  "resource.reject", EntityType: "resource", EntityID: resource.ID,
+		UniversityID: &resource.UniversityID, DepartmentID: &resource.DepartmentID,
+		Reason:  body.Reason,
+		Changes: map[string]any{"status": [2]any{domain.ResourceStatusPending, domain.ResourceStatusRejected}},
+	})
 
 	// TODO: FCM — send push notification to resource.CreatedByID
 	// notificationService.SendToUser(resource.CreatedByID, "Your submission needs revision", body.Reason)

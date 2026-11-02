@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"campusassistant-api/internal/domain"
+	"campusassistant-api/internal/audit"
 	"campusassistant-api/internal/delivery/http/websocket"
+	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -270,17 +271,22 @@ func (h *NotificationHandler) createNotifications(c *gin.Context, req createNoti
 		}
 	}
 
+	var sent *domain.Notification
 	var recipients []domain.NotificationRecipient
 	if topics := broadcastTopics(req); len(topics) > 0 {
-		_, recipients, err = h.notificationService.SendToUsersViaTopics(c.Request.Context(), n, userIDs, adminID, topics, broadcastWS)
+		sent, recipients, err = h.notificationService.SendToUsersViaTopics(c.Request.Context(), n, userIDs, adminID, topics, broadcastWS)
 	} else {
-		_, recipients, err = h.notificationService.SendToUsers(c.Request.Context(), n, userIDs, adminID, broadcastWS)
+		sent, recipients, err = h.notificationService.SendToUsers(c.Request.Context(), n, userIDs, adminID, broadcastWS)
 	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	count := len(recipients)
+	audit.RecordRequest(c, h.db, audit.Event{
+		Action: "notification.broadcast", EntityType: "notification", EntityID: sent.ID,
+		Changes: map[string]any{"scope": req.Scope, "target_id": req.TargetID, "type": req.Type, "recipient_count": count},
+	})
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "Notifications sent",

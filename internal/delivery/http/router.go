@@ -175,7 +175,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 
 	// Admin management (requires JWT)
-	adminHandler := handler.NewAdminHandler(adminRepo)
+	adminHandler := handler.NewAdminHandler(adminRepo, db)
 	adminsGroup := v1.Group("/admins")
 	adminsGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
@@ -194,12 +194,14 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		systemLogsGroup.GET("", guard.Require(middleware.AdminJWT), systemLogHandler.List)
 		systemLogsGroup.GET("/stats", guard.Require(middleware.AdminJWT), systemLogHandler.Stats)
 	}
+	auditLogHandler := handler.NewAuditLogHandler(db)
+	v1.GET("/audit-logs", guard.Require(middleware.AdminJWT), auditLogHandler.List)
 
 	// Helper to register generic routes
 	registerRoutes[domain.University](v1, db, "universities", guard, middleware.Access{Read: middleware.Public, Write: middleware.AdminJWT})
 	registerRoutes[domain.Faculty](v1, db, "faculties", guard, middleware.Access{Read: middleware.Public, Write: middleware.AdminJWT})
 	registerRoutes[domain.Department](v1, db, "departments", guard, middleware.Access{Read: middleware.Public, Write: middleware.AdminJWT})
-	registerRoutes[domain.Session](v1, db, "sessions", guard, middleware.Access{Read: middleware.Public, Write: middleware.AdminJWT})
+	registerRoutes[domain.Session](v1, db, "sessions", guard, middleware.Access{Read: middleware.Public, Write: middleware.AdminJWT}, "sort_key DESC")
 	registerRoutes[domain.Batch](v1, db, "batches", guard, middleware.Access{Read: middleware.Public, Write: middleware.AdminJWT})
 	registerRoutes[domain.User](v1, db, "users", guard, middleware.Access{Read: middleware.AdminJWT, Write: middleware.AdminJWT})
 	registerRoutes[domain.Notice](v1, db, "notices", guard, middleware.Access{Read: middleware.AuthJWT, Write: middleware.AdminJWT})
@@ -230,6 +232,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		studentGroup.POST("/claim-profile", middleware.JWTMiddleware(jwtManager, db), studentHandler.ClaimProfile)
 		studentGroup.GET("", guard.Require(middleware.AuthJWT), studentHandler.GetAll)
 		studentGroup.GET("/:id", guard.Require(middleware.AuthJWT), studentHandler.GetByID)
+		studentGroup.POST("/rotate-unclaimed-codes", guard.Require(middleware.AdminJWT), studentHandler.RotateUnclaimedCodes)
 		studentGroup.POST("/:id/send-code-email", guard.Require(middleware.AdminJWT), studentHandler.SendCodeEmail)
 		studentGroup.POST("/:id/generate-code", guard.Require(middleware.AdminJWT), studentHandler.GenerateCode)
 		studentGroup.PUT("/:id", guard.Require(middleware.AdminJWT), studentHandler.Update)
@@ -317,7 +320,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 	crRepo := postgres.NewGormRepository[domain.CR](db)
 	crUsecase := usecase.NewGenericUsecase(crRepo)
-	crHandler := handler.NewCrHandler(crUsecase)
+	crHandler := handler.NewCrHandler(crUsecase, db)
 	crGroup := v1.Group("/crs")
 	{
 		crGroup.POST("", guard.Require(middleware.AdminJWT), crHandler.Create)
@@ -367,6 +370,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	levelRepo := postgres.NewLevelRepository(db)
 	levelUsecase := usecase.NewGenericUsecase[domain.Level](levelRepo)
 	levelHandler := handler.NewGenericHandler[domain.Level](levelUsecase)
+	levelHandler.DB = db
 	lg := v1.Group("/levels")
 	{
 		lg.POST("", guard.Require(middleware.AdminJWT), levelHandler.Create)
@@ -382,6 +386,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	bookmarkRepo := postgres.NewGormRepository[domain.Bookmark](db)
 	bookmarkUc := usecase.NewGenericUsecase(bookmarkRepo)
 	bookmarkHandler := handler.NewGenericHandler[domain.Bookmark](bookmarkUc)
+	bookmarkHandler.DB = db
 	bg := v1.Group("/bookmarks")
 	{
 		bg.POST("", guard.Require(middleware.AuthJWT), bookmarkHandler.Create)
@@ -432,6 +437,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	courseRepo := postgres.NewCourseRepository(db)
 	courseUsecase := usecase.NewGenericUsecase[domain.Course](courseRepo)
 	courseHandler := handler.NewGenericHandler[domain.Course](courseUsecase)
+	courseHandler.DB = db
 	cg := v1.Group("/courses")
 	{
 		cg.POST("", guard.Require(middleware.AdminJWT), courseHandler.Create)
@@ -446,6 +452,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	chapterRepo := postgres.NewChapterRepository(db)
 	chapterUsecase := usecase.NewGenericUsecase(chapterRepo)
 	chapterHandler := handler.NewGenericHandler(chapterUsecase)
+	chapterHandler.DB = db
 	chg := v1.Group("/chapters")
 	{
 		chg.POST("", guard.Require(middleware.AdminJWT), chapterHandler.Create)
@@ -459,6 +466,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	bannerRepo := postgres.NewBannerRepository(db)
 	bannerUsecase := usecase.NewGenericUsecase[domain.Banner](bannerRepo)
 	bannerHandler := handler.NewGenericHandler[domain.Banner](bannerUsecase)
+	bannerHandler.DB = db
 	bannerGroup := v1.Group("/banners")
 	{
 		bannerGroup.POST("", guard.Require(middleware.AdminJWT), bannerHandler.Create)
@@ -863,7 +871,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 
 	// Subscription Routes
-	subHandler := handler.NewSubscriptionHandler(subRepo, paymentService)
+	subHandler := handler.NewSubscriptionHandler(subRepo, paymentService, db)
 	subGroup := v1.Group("/subscriptions")
 	subGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
@@ -901,7 +909,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 
 	// Billing — invoices, merchant earnings/payouts, admin ledger.
-	billingHandler := handler.NewBillingHandler(billingSvc, merchantRepo)
+	billingHandler := handler.NewBillingHandler(billingSvc, merchantRepo, db)
 	myBillingGroup := v1.Group("/my")
 	myBillingGroup.Use(middleware.JWTMiddleware(jwtManager, db))
 	{
@@ -990,6 +998,31 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		adminStudentVerificationGroup.GET("/:id", studentVerificationHandler.GetByID)
 		adminStudentVerificationGroup.PUT("/:id/approve", studentVerificationHandler.Approve)
 		adminStudentVerificationGroup.PUT("/:id/reject", studentVerificationHandler.Reject)
+	}
+
+	moderatorAdminHandler := handler.NewModeratorAdminHandler(db, notificationService)
+	moderatorsGroup := v1.Group("/moderators")
+	{
+		moderatorsGroup.GET("", guard.Require(middleware.AdminJWT), moderatorAdminHandler.List)
+		moderatorsGroup.POST("", guard.Require(middleware.AdminJWT), moderatorAdminHandler.Create)
+		moderatorsGroup.PATCH("/:id", guard.Require(middleware.AdminJWT), moderatorAdminHandler.Update)
+		moderatorsGroup.POST("/:id/revoke", guard.Require(middleware.AdminJWT), moderatorAdminHandler.Revoke)
+	}
+
+	moderationHandler := handler.NewModerationHandler(db, studentHandler, studentVerificationHandler, resourceHandler, r2)
+	moderationGroup := v1.Group("/moderation")
+	moderationGroup.Use(middleware.JWTMiddleware(jwtManager, db))
+	{
+		moderationGroup.GET("/roles", moderationHandler.Roles)
+		moderationGroup.GET("/students", moderationHandler.Students)
+		moderationGroup.POST("/students/:id/generate-code", moderationHandler.GenerateCode)
+		moderationGroup.GET("/verifications", moderationHandler.Verifications)
+		moderationGroup.GET("/verifications/:id", moderationHandler.Verification)
+		moderationGroup.PUT("/verifications/:id/approve", moderationHandler.ApproveVerification)
+		moderationGroup.PUT("/verifications/:id/reject", moderationHandler.RejectVerification)
+		moderationGroup.GET("/resources", moderationHandler.Resources)
+		moderationGroup.PATCH("/resources/:id/approve", moderationHandler.ApproveResource)
+		moderationGroup.PATCH("/resources/:id/reject", moderationHandler.RejectResource)
 	}
 
 	// Community Routes
@@ -1232,10 +1265,15 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 // previously took no policy at all, and the result was ~20 resources — users,
 // students, verification codes — exposed to anyone holding the API key that
 // ships inside the client bundles.
-func registerRoutes[T any](group *gin.RouterGroup, db *gorm.DB, path string, guard *middleware.Guard, access middleware.Access) {
+// An optional order sets the list endpoint's default ORDER BY.
+func registerRoutes[T any](group *gin.RouterGroup, db *gorm.DB, path string, guard *middleware.Guard, access middleware.Access, order ...string) {
 	repo := postgres.NewGormRepository[T](db)
+	if len(order) > 0 {
+		repo = postgres.NewGormRepositoryWithOrder[T](db, order[0])
+	}
 	uc := usecase.NewGenericUsecase(repo)
 	h := handler.NewGenericHandler(uc)
+	h.DB = db
 
 	read := guard.Require(access.Read)
 	write := guard.Require(access.Write)

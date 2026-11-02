@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"campusassistant-api/internal/authz"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/repository/postgres"
 	"campusassistant-api/internal/service"
 	"campusassistant-api/pkg/auth"
 	"campusassistant-api/pkg/mailer"
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -230,7 +232,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// sees blank hall/blood/batch even when they're already saved, since
 	// those aren't columns on User itself (see domain.User's Hall/Blood
 	// comment) and the plain `user` above never loaded the Student relation.
-	fullUser, err := h.loadFullUser(user.ID)
+	fullUser, err := h.loadFullUser(c.Request.Context(), user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
 		return
@@ -464,7 +466,13 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	// Re-fetch so the response includes the latest user state
 	h.db.First(&user, userID)
 	user.ComputeSubscriptionStatus()
-	h.markCR(&user)
+	roles, err := authz.Scopes(c.Request.Context(), h.db, user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load moderator roles"})
+		return
+	}
+	user.ModeratorRoles = roles
+	user.IsCR = len(roles) > 0
 
 	// Issue new access token with the (possibly bumped) token version
 	accessToken, err := h.jwtManager.GenerateAccessToken(
@@ -511,7 +519,7 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 		return
 	}
 
-	user, err := h.loadFullUser(userID)
+	user, err := h.loadFullUser(c.Request.Context(), userID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
 		return
@@ -525,9 +533,9 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 // subscription status, CR flag, university/department fallbacks) that any
 // handler returning a full user profile needs — shared by GetMe and Login
 // so both agree on the same user shape.
-func (h *AuthHandler) loadFullUser(userID any) (domain.User, error) {
+func (h *AuthHandler) loadFullUser(ctx context.Context, userID any) (domain.User, error) {
 	var user domain.User
-	if err := h.db.
+	if err := h.db.WithContext(ctx).
 		Preload("Student.Batch").Preload("Student.Department").Preload("Student.University").Preload("Student.Hall").
 		Preload("Teacher.Department").Preload("Teacher.University").
 		Preload("Staff.Department").Preload("Staff.University").
@@ -538,6 +546,7 @@ func (h *AuthHandler) loadFullUser(userID any) (domain.User, error) {
 	// Populate batch/hall/blood group from the Student relation — these
 	// aren't columns on User itself (see domain.User's Hall/Blood comment).
 	if user.Student != nil {
+		user.Student.VerificationCode = ""
 		if user.Student.Batch != nil {
 			user.Batch = user.Student.Batch.Name
 		}
@@ -546,8 +555,19 @@ func (h *AuthHandler) loadFullUser(userID any) (domain.User, error) {
 		}
 		user.Blood = user.Student.BloodGroup
 	}
+	if user.Teacher != nil {
+		user.Teacher.VerificationCode = ""
+	}
+	if user.Staff != nil {
+		user.Staff.VerificationCode = ""
+	}
 	user.ComputeSubscriptionStatus()
-	h.markCR(&user)
+	roles, err := authz.Scopes(ctx, h.db, user.ID)
+	if err != nil {
+		return user, err
+	}
+	user.ModeratorRoles = roles
+	user.IsCR = len(roles) > 0
 	// Best-effort: a perks lookup failure must not break login or /me.
 	if perks, err := service.ResolveGrantPerks(h.db, user.ID, time.Now()); err == nil {
 		user.Perks = perks
@@ -575,12 +595,4 @@ func (h *AuthHandler) loadFullUser(userID any) (domain.User, error) {
 	}
 
 	return user, nil
-}
-
-// markCR sets user.IsCR from the cr table so the client's CR-only actions match
-// what the API will actually authorize.
-func (h *AuthHandler) markCR(user *domain.User) {
-	var n int64
-	h.db.Model(&domain.CR{}).Scopes(domain.ActiveCR, domain.CRsOf(user.ID)).Count(&n)
-	user.IsCR = n > 0
 }

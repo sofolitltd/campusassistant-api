@@ -25,7 +25,7 @@ func classNoticeTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&domain.CR{}, &domain.ClassNotice{}); err != nil {
+	if err := db.AutoMigrate(&domain.CR{}, &domain.ClassNotice{}, &domain.Batch{}, &domain.Moderator{}, &domain.AuditLog{}, &domain.SystemLog{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -44,43 +44,40 @@ func callClassNotice(h *ClassNoticeHandler, fn gin.HandlerFunc, userID uuid.UUID
 	return w
 }
 
-func TestClassNoticeCreate_CRScope(t *testing.T) {
+func TestClassNoticeCreate_ModeratorScope(t *testing.T) {
 	db := classNoticeTestDB(t)
 	h := NewClassNoticeHandler(db)
 
+	university, otherUniversity := uuid.New(), uuid.New()
 	dept, otherDept := uuid.New(), uuid.New()
-	myBatch, otherBatch := uuid.New(), uuid.New()
-	cr, former, viaStudent, stranger := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	studentRow := uuid.New()
-	past := time.Now().Add(-time.Hour)
+	myBatch, otherBatch, otherCampusBatch := uuid.New(), uuid.New(), uuid.New()
+	batchModerator, deptModerator, universityModerator, expired, future, stranger := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	past, futureStart := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
 
-	mk := func(c domain.CR) {
-		c.ID = uuid.New()
-		c.Name = "CR"
-		c.UniversityID = uuid.New()
-		if err := db.Create(&c).Error; err != nil {
+	for _, batch := range []domain.Batch{
+		{Base: domain.Base{ID: myBatch}, Name: "CSE-21", DepartmentID: dept, UniversityID: university},
+		{Base: domain.Base{ID: otherBatch}, Name: "CSE-22", DepartmentID: dept, UniversityID: university},
+		{Base: domain.Base{ID: otherCampusBatch}, Name: "Other", DepartmentID: otherDept, UniversityID: otherUniversity},
+	} {
+		if err := db.Create(&batch).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	mk(domain.CR{UserID: &cr, DepartmentID: dept, BatchID: myBatch, IsCurrent: true})
-	mk(domain.CR{UserID: &former, DepartmentID: dept, BatchID: myBatch, IsCurrent: false})
-	// Imported-style row: linked only through the student profile.
-	mk(domain.CR{TargetStudentID: &studentRow, DepartmentID: dept, BatchID: myBatch, IsCurrent: true})
-	student := domain.Student{
-		UserID: &viaStudent, UniversityID: uuid.New(), DepartmentID: dept,
-		BatchID: myBatch, SessionID: uuid.New(),
+	for _, assignment := range []domain.Moderator{
+		{UserID: batchModerator, ScopeType: domain.ModeratorScopeBatch, ScopeID: myBatch, UniversityID: university, DepartmentID: &dept, IsActive: true},
+		{UserID: deptModerator, ScopeType: domain.ModeratorScopeDepartment, ScopeID: dept, UniversityID: university, DepartmentID: &dept, IsActive: true},
+		{UserID: universityModerator, ScopeType: domain.ModeratorScopeUniversity, ScopeID: university, UniversityID: university, IsActive: true},
+		{UserID: expired, ScopeType: domain.ModeratorScopeBatch, ScopeID: myBatch, UniversityID: university, DepartmentID: &dept, IsActive: true, TermEnd: &past},
+		{UserID: future, ScopeType: domain.ModeratorScopeBatch, ScopeID: myBatch, UniversityID: university, DepartmentID: &dept, IsActive: true, TermStart: &futureStart},
+	} {
+		if err := db.Create(&assignment).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
-	student.ID = studentRow
-	if err := db.Create(&student).Error; err != nil {
-		t.Fatal(err)
-	}
-	// Term over.
-	expired := uuid.New()
-	mk(domain.CR{UserID: &expired, DepartmentID: dept, BatchID: myBatch, IsCurrent: true, TermEnd: &past})
 
-	post := func(user uuid.UUID, role string, dept uuid.UUID, batch *uuid.UUID) *httptest.ResponseRecorder {
+	post := func(user uuid.UUID, role string, university, department uuid.UUID, batch *uuid.UUID) *httptest.ResponseRecorder {
 		return callClassNotice(h, h.Create, user, role, map[string]any{
-			"university_id": uuid.New(), "department_id": dept, "batch_id": batch, "title": "Class off",
+			"university_id": university, "department_id": department, "batch_id": batch, "title": "Class off",
 		})
 	}
 
@@ -89,15 +86,15 @@ func TestClassNoticeCreate_CRScope(t *testing.T) {
 		w    *httptest.ResponseRecorder
 		want int
 	}{
-		{"CR, batch omitted -> pinned to own batch", post(cr, "student", dept, nil), http.StatusCreated},
-		{"CR, own batch", post(cr, "student", dept, &myBatch), http.StatusCreated},
-		{"CR via student link", post(viaStudent, "student", dept, nil), http.StatusCreated},
-		{"CR targeting another batch", post(cr, "student", dept, &otherBatch), http.StatusForbidden},
-		{"CR of another department", post(cr, "student", otherDept, nil), http.StatusForbidden},
-		{"former CR", post(former, "student", dept, nil), http.StatusForbidden},
-		{"CR whose term ended", post(expired, "student", dept, nil), http.StatusForbidden},
-		{"ordinary student", post(stranger, "student", dept, nil), http.StatusForbidden},
-		{"admin, any batch", post(stranger, "admin", dept, &otherBatch), http.StatusCreated},
+		{"batch moderator, own batch", post(batchModerator, "student", university, dept, &myBatch), http.StatusCreated},
+		{"batch moderator, other batch", post(batchModerator, "student", university, dept, &otherBatch), http.StatusForbidden},
+		{"department moderator, any department batch", post(deptModerator, "student", university, dept, &otherBatch), http.StatusCreated},
+		{"department moderator, other department", post(deptModerator, "student", otherUniversity, otherDept, &otherCampusBatch), http.StatusForbidden},
+		{"university moderator, department batch", post(universityModerator, "student", university, dept, &otherBatch), http.StatusCreated},
+		{"expired moderator", post(expired, "student", university, dept, &myBatch), http.StatusForbidden},
+		{"future moderator", post(future, "student", university, dept, &myBatch), http.StatusForbidden},
+		{"ordinary student", post(stranger, "student", university, dept, &myBatch), http.StatusForbidden},
+		{"admin, any batch", post(stranger, "admin", otherUniversity, otherDept, &otherCampusBatch), http.StatusCreated},
 	}
 	for _, tc := range cases {
 		if tc.w.Code != tc.want {
@@ -106,11 +103,11 @@ func TestClassNoticeCreate_CRScope(t *testing.T) {
 	}
 
 	var n domain.ClassNotice
-	if err := db.Where("created_by_id = ?", cr).First(&n).Error; err != nil {
+	if err := db.Where("created_by_id = ?", batchModerator).First(&n).Error; err != nil {
 		t.Fatal(err)
 	}
 	if n.BatchID == nil || *n.BatchID != myBatch {
-		t.Errorf("CR notice not pinned to their batch: %v", n.BatchID)
+		t.Errorf("batch moderator notice not pinned to their batch: %v", n.BatchID)
 	}
 }
 
