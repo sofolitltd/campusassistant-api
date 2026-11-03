@@ -9,8 +9,12 @@ import (
 // those entities never breaks existing course data.
 type Course struct {
 	Base
-	CourseCode   string    `gorm:"size:50;not null;index" json:"course_code"`
-	CourseTitle  string    `gorm:"size:255;not null" json:"course_title"`
+	CourseCode  string `gorm:"size:50;not null;index" json:"course_code"`
+	CourseTitle string `gorm:"size:255;not null" json:"course_title"`
+	// PreviousCode is the code this course had before a syllabus change
+	// (e.g. 0313PSY-1101 was psy-101). Chapters and resources filed under
+	// either code show under both courses of the department.
+	PreviousCode string    `gorm:"size:50;index" json:"previous_code"`
 	UniversityID uuid.UUID `gorm:"type:uuid;index" json:"university_id"`
 	DepartmentID uuid.UUID `gorm:"type:uuid;index" json:"department_id"`
 	TotalCredits float64   `gorm:"default:0" json:"total_credits"`

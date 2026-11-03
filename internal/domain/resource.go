@@ -67,6 +67,11 @@ type Resource struct {
 	Tags     pq.StringArray `gorm:"type:text[];default:'{}'" json:"tags"` // ["midterm","important"]
 	IsPublic bool           `gorm:"default:true" json:"is_public"`
 
+	// BatchOnly keeps the resource to the students of its tagged batches.
+	// Otherwise every batch sees it; the tags only say whose it is, and the
+	// selected batch's resources are listed first.
+	BatchOnly bool `gorm:"default:false;not null" json:"batch_only"`
+
 	// Type-specific metadata (JSONB) — flexible per resource type:
 	//   note:     {"lesson_no": 4, "note_type": "typed", "teacher": "Dr. Rahman", "chapter": "Ch2"}
 	//   book:     {"author": "Cormen", "publisher": "MIT Press", "edition": "3rd", "isbn": "..."}

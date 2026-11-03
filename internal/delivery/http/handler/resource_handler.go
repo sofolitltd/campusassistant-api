@@ -32,6 +32,13 @@ type ResourceHandler struct {
 func NewResourceHandler(u usecase.Usecase[domain.Resource], s *storage.R2Storage, db *gorm.DB, notificationService *service.NotificationService) *ResourceHandler {
 	generic := NewGenericHandler[domain.Resource](u)
 	generic.DB = db
+	// Batch-only resources are hidden from students outside their batches;
+	// admins see everything.
+	generic.ExtendFilter = func(c *gin.Context, filter map[string]interface{}) {
+		if !callerIsAdmin(c) {
+			filter["viewer_user_id"] = callerID(c)
+		}
+	}
 	return &ResourceHandler{
 		GenericHandler:      generic,
 		Usecase:             u,
@@ -176,14 +183,11 @@ func (h *ResourceHandler) Delete(c *gin.Context) {
 		audit.RecordRequest(c, h.db, eventFor(c, "purge", resource, map[string]any{"deleted": resource}))
 
 		if h.storage != nil {
-			if resource.FileURL != "" {
-				if err := h.storage.DeleteFile(c.Request.Context(), resource.FileURL); err != nil {
-					c.Error(err)
-				}
-			}
-			if resource.ThumbnailURL != "" {
-				if err := h.storage.DeleteFile(c.Request.Context(), resource.ThumbnailURL); err != nil {
-					c.Error(err)
+			for _, f := range []string{resource.FileURL, resource.ThumbnailURL} {
+				if f != "" && !fileStillUsed(c.Request.Context(), h.db, f) {
+					if err := h.storage.DeleteFile(c.Request.Context(), f); err != nil {
+						c.Error(err)
+					}
 				}
 			}
 		}
@@ -447,4 +451,16 @@ func (h *ResourceHandler) GetMyRating(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"your_rating": rating.Rating})
+}
+
+// fileStillUsed reports whether any resource row, trashed ones included,
+// still points at the stored file, so purging one row can't take a file
+// another resource uses. Unsure (query error) counts as used.
+func fileStillUsed(ctx context.Context, db *gorm.DB, url string) bool {
+	var n int64
+	if err := db.WithContext(ctx).Table("resources").
+		Where("file_url = ? OR thumbnail_url = ?", url, url).Count(&n).Error; err != nil {
+		return true
+	}
+	return n > 0
 }

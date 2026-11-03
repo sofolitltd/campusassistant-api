@@ -92,6 +92,15 @@ func (r *chapterRepository) GetAll(ctx context.Context, filter map[string]interf
 		db = db.Where("chapters.id IN (?)", sub)
 	}
 
+	// A course renamed in a syllabus change shares its chapters with the
+	// code it replaced, within the department.
+	if code, ok := filter["course_code"].(string); ok {
+		if dept, ok := filter["department_id"]; ok {
+			db = db.Where("LOWER(chapters.course_code) IN ?", linkedCourseCodes(ctx, r.db, dept, code))
+			delete(filter, "course_code")
+		}
+	}
+
 	// Apply other filters
 	for key, value := range filter {
 		if key == "search" {

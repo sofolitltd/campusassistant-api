@@ -23,6 +23,8 @@ type GenericHandler[T any] struct {
 	// AfterUpdate, when set, runs after a successful Update with the record
 	// as it was before the request and as saved.
 	AfterUpdate func(c *gin.Context, before T, after *T)
+	// ExtendFilter, when set, adds caller-dependent filters to GetAll.
+	ExtendFilter func(c *gin.Context, filter map[string]interface{})
 }
 
 func NewGenericHandler[T any](u usecase.Usecase[T]) *GenericHandler[T] {
@@ -126,7 +128,7 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 	}
 
 	// Add integer filters
-	intFilters := []string{"lesson_no", "chapter_no"}
+	intFilters := []string{"lesson_no", "chapter_no", "file_size_bytes"}
 	for _, f := range intFilters {
 		if val := c.Query(f); val != "" {
 			if intVal, err := strconv.Atoi(val); err == nil {
@@ -135,8 +137,21 @@ func (h *GenericHandler[T]) GetAll(c *gin.Context) {
 		}
 	}
 
+	// Course codes repeat across departments (PSY-101 exists in many), so a
+	// course_code filter alone would return every department's rows.
+	if _, hasCode := filter["course_code"]; hasCode {
+		if _, hasDept := filter["department_id"]; !hasDept {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "department_id is required with course_code"})
+			return
+		}
+	}
+
 	if search := c.Query("search"); search != "" {
 		filter["search"] = search
+	}
+
+	if h.ExtendFilter != nil {
+		h.ExtendFilter(c, filter)
 	}
 
 	if includeDetails := c.Query("include_details"); includeDetails == "true" {

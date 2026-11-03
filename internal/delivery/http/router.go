@@ -235,6 +235,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	// Honors → Masters moves; see EnrollmentHandler.
 	enrollmentHandler := handler.NewEnrollmentHandler(db)
 	v1.POST("/batches/:id/promote", guard.Require(middleware.AdminJWT), enrollmentHandler.Promote)
+	v1.POST("/batches/:id/copy-syllabus", guard.Require(middleware.AdminJWT), handler.NewSyllabusCopyHandler(db).CopySyllabus)
 	studentGroup := v1.Group("/students")
 	{
 		studentGroup.POST("", guard.Require(middleware.AdminJWT), studentHandler.Create)

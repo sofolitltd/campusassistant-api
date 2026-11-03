@@ -133,41 +133,46 @@ func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]inter
 
 	db := r.db.WithContext(ctx).Model(&domain.Resource{})
 
-	// ── Batch filtering (join-based) ─────────────────────────────────────────
-	// ── Batch filtering (join-based) ─────────────────────────────────────────
-	batchID, hasBatchID := filter["batch_id"]
-	batchName, hasBatchName := filter["batch"]
-
-	// batch_id must parse as a UUID to be usable in the subquery below.
-	// Sentinels (Flutter's "all_batches" for "All Batches"), empty strings,
-	// or garbage would make the UUID comparison error out (HTTP 500) —
-	// treat those as "no batch filter" instead.
-	if hasBatchID {
-		if s, ok := batchID.(string); !ok || s == "" {
-			hasBatchID = false
-		} else if _, err := uuid.Parse(s); err != nil {
-			hasBatchID = false
+	// ── Batch: ordering, not filtering ───────────────────────────────────────
+	// Every batch sees every resource; the selected batch's own come first.
+	// Only batch_only resources are limited, by the viewer's own batch below.
+	var ownBatch interface{}
+	if v, ok := filter["batch_id"]; ok {
+		if s, ok := v.(string); ok {
+			if _, err := uuid.Parse(s); err == nil {
+				ownBatch = s
+			}
 		}
-		if !hasBatchID {
-			delete(filter, "batch_id")
-		}
+		delete(filter, "batch_id")
 	}
 
-	// Handle Batch Filtering via subquery for cleaner DISTINCT handling in COUNT
-	if hasBatchID || hasBatchName {
+	// Batch-name filter, only without batch_id: the app sends both, and the
+	// id means "order by this batch", not "only this batch".
+	if batchName, ok := filter["batch"]; ok && batchName != "" && ownBatch == nil {
 		sub := r.db.Table("resource_batches rb").
 			Select("rb.resource_id").
-			Joins("JOIN batches b ON b.id = rb.batch_id")
-
-		if hasBatchID && batchID != "" {
-			sub = sub.Where("b.id = ?", batchID)
-			delete(filter, "batch_id")
-		}
-		if hasBatchName && batchName != "" {
-			sub = sub.Where("b.name = ?", batchName)
-			delete(filter, "batch")
-		}
+			Joins("JOIN batches b ON b.id = rb.batch_id").
+			Where("b.name = ?", batchName)
 		db = db.Where("resources.id IN (?)", sub)
+	}
+	delete(filter, "batch")
+
+	// Non-admin callers: batch_only resources only for students of a tagged
+	// batch, and for whoever uploaded them.
+	if viewer, ok := filter["viewer_user_id"]; ok {
+		db = db.Where(`(resources.batch_only = ? OR resources.created_by_id = ? OR EXISTS (
+			SELECT 1 FROM resource_batches rb JOIN students s ON s.batch_id = rb.batch_id
+			WHERE rb.resource_id = resources.id AND s.user_id = ? AND s.deleted_at IS NULL))`, false, viewer, viewer)
+		delete(filter, "viewer_user_id")
+	}
+
+	// A course renamed in a syllabus change shares its resources with the
+	// code it replaced, within the department.
+	if code, ok := filter["course_code"].(string); ok {
+		if dept, ok := filter["department_id"]; ok {
+			db = db.Where("LOWER(resources.course_code) IN ?", linkedCourseCodes(ctx, r.db, dept, code))
+			delete(filter, "course_code")
+		}
 	}
 
 	// ── Status visibility ────────────────────────────────────────────────────
@@ -186,7 +191,7 @@ func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]inter
 
 			if hasType && resType == "book" {
 				// For Library: Search Book Title, Author (metadata), Course Code, and Course Name (via subquery to avoid duplicates)
-				db = db.Where("(resources.title ILIKE ? OR resources.description ILIKE ? OR CAST(resources.metadata->>'author' AS TEXT) ILIKE ? OR resources.course_code ILIKE ? OR EXISTS (SELECT 1 FROM courses WHERE courses.course_code = resources.course_code AND courses.course_title ILIKE ?))",
+				db = db.Where("(resources.title ILIKE ? OR resources.description ILIKE ? OR CAST(resources.metadata->>'author' AS TEXT) ILIKE ? OR resources.course_code ILIKE ? OR EXISTS (SELECT 1 FROM courses WHERE courses.course_code = resources.course_code AND courses.department_id = resources.department_id AND courses.deleted_at IS NULL AND courses.course_title ILIKE ?))",
 					searchVal, searchVal, searchVal, searchVal, searchVal)
 			} else {
 				// Generic Search: Title, Description, and Course Code
@@ -204,8 +209,9 @@ func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]inter
 			db = db.Where("(resources.years @> ? OR resources.years @> ? OR resources.metadata->>'year' = ?)",
 				fmt.Sprintf(`["%d"]`, year), fmt.Sprintf(`[%d]`, year), strconv.Itoa(year))
 		case "level_id":
-			// Resources have no level of their own; match through their course.
-			db = db.Where("resources.course_code IN (SELECT courses.course_code FROM courses WHERE courses.level_id = ? AND courses.deleted_at IS NULL)", value)
+			// Resources have no level of their own; match through their course, in
+			// the same department since course codes repeat across departments.
+			db = db.Where("EXISTS (SELECT 1 FROM courses WHERE courses.course_code = resources.course_code AND courses.department_id = resources.department_id AND courses.level_id = ? AND courses.deleted_at IS NULL)", value)
 		case "tags":
 			// Filter by a single tag string
 			db = db.Where("? = ANY(resources.tags)", value)
@@ -220,8 +226,18 @@ func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]inter
 
 	// Creator is back-filled via attachResourceCreators below — the GORM
 	// association preload matches nothing (see attachResourceCreators).
+	// One ORDER BY expression: GORM drops an expression order when another
+	// Order call is merged into it.
+	order := clause.Expr{SQL: "resources.created_at DESC"}
+	if ownBatch != nil {
+		order = clause.Expr{
+			SQL:  "EXISTS (SELECT 1 FROM resource_batches rb WHERE rb.resource_id = resources.id AND rb.batch_id = ?) DESC, resources.created_at DESC",
+			Vars: []interface{}{ownBatch},
+		}
+	}
+	order.WithoutParentheses = true
 	err := db.Preload("Batches").
-		Order("resources.created_at DESC").
+		Order(clause.OrderBy{Expression: order}).
 		Limit(limit).Offset(offset).
 		Find(&entities).Error
 	if err != nil {

@@ -277,7 +277,7 @@ func (h *TrashHandler) Purge(c *gin.Context) {
 
 	if h.storage != nil {
 		for _, f := range files {
-			if f != "" {
+			if f != "" && !fileStillUsed(ctx, h.db, f) {
 				if err := h.storage.DeleteFile(ctx, f); err != nil {
 					c.Error(err)
 				}
