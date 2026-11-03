@@ -1,11 +1,14 @@
 package domain
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 // ResourceStatus is the moderation/workflow state of a resource.
@@ -84,10 +87,81 @@ type Resource struct {
 	BatchIDs []string `gorm:"-" json:"batch_ids,omitempty"`
 	Batches  []Batch  `gorm:"many2many:resource_batches;save_associations:false" json:"batches,omitempty"`
 
+	// Authors credits the people who made it (the uploader is CreatedByID).
+	// On update, nil means "not sent, keep"; an empty list clears them.
+	Authors []ResourceAuthor `gorm:"foreignKey:ResourceID;save_associations:false" json:"authors,omitempty"`
+
 	// Notify controls whether creating/publishing this resource fans out a
 	// notification to its selected batches. Defaults to true when omitted
 	// (opt-out, not opt-in) — nil vs explicit false is why this is a pointer.
 	Notify *bool `gorm:"-" json:"notify,omitempty"`
+}
+
+// ResetForBind clears Authors before an update binds the request body, so an
+// omitted "authors" stays nil (keep) and decoded authors don't inherit fields
+// from the stored rows encoding/json reuses.
+func (r *Resource) ResetForBind() { r.Authors = nil }
+
+// Author roles: whose class it came from, who wrote it, or the textbook it
+// summarises.
+const (
+	AuthorRoleLecture = "lecture"
+	AuthorRoleWriter  = "writer"
+	AuthorRoleSource  = "source"
+)
+
+// ResourceAuthor is one credited person (or textbook) of a resource. It links
+// to a teacher or student profile when known; Name is always set, so people
+// who aren't in the lists (former teachers, old seniors) are still credited.
+type ResourceAuthor struct {
+	ID         uuid.UUID  `gorm:"type:uuid;primaryKey" json:"id"`
+	ResourceID uuid.UUID  `gorm:"type:uuid;not null;index" json:"resource_id"`
+	Position   int        `gorm:"not null;default:0" json:"position"`
+	Role       string     `gorm:"size:20;not null" json:"role"`
+	TeacherID  *uuid.UUID `gorm:"type:uuid;index" json:"teacher_id,omitempty"`
+	StudentID  *uuid.UUID `gorm:"type:uuid;index" json:"student_id,omitempty"`
+	Name       string     `gorm:"size:150;not null" json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+// MaxResourceAuthors caps the credits on one resource.
+const MaxResourceAuthors = 10
+
+// Validate checks the authors sent with a create or update. Names are filled
+// from the linked profile when saving, so a linked author may omit it.
+func (r *Resource) Validate() error {
+	if len(r.Authors) > MaxResourceAuthors {
+		return fmt.Errorf("at most %d authors", MaxResourceAuthors)
+	}
+	for i := range r.Authors {
+		a := &r.Authors[i]
+		a.Name = strings.TrimSpace(a.Name)
+		switch a.Role {
+		case AuthorRoleLecture, AuthorRoleWriter, AuthorRoleSource:
+		default:
+			return fmt.Errorf("author %d: role must be lecture, writer or source", i+1)
+		}
+		if a.TeacherID != nil && a.StudentID != nil {
+			return fmt.Errorf("author %d: link a teacher or a student, not both", i+1)
+		}
+		if a.Role == AuthorRoleSource && (a.TeacherID != nil || a.StudentID != nil) {
+			return fmt.Errorf("author %d: a source is a book name, not a profile", i+1)
+		}
+		if a.TeacherID == nil && a.StudentID == nil && a.Name == "" {
+			return fmt.Errorf("author %d: name is required", i+1)
+		}
+		if len(a.Name) > 150 {
+			return fmt.Errorf("author %d: name is too long", i+1)
+		}
+	}
+	return nil
+}
+
+func (a *ResourceAuthor) BeforeCreate(_ *gorm.DB) error {
+	if a.ID == uuid.Nil {
+		a.ID = uuid.New()
+	}
+	return nil
 }
 
 // ResourceRating is one user's 1-5 star rating of a Resource. Composite PK

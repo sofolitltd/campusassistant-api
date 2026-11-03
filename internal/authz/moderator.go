@@ -20,6 +20,9 @@ const (
 	ClassNoticesManage  Permission = "class_notices.manage"
 	ClassSlotsManage    Permission = "class_slots.manage"
 	ResourcesReview     Permission = "resources.review"
+	// ResourcesEdit lets a moderator (including a batch CR) correct a
+	// resource in their scope, e.g. its authors.
+	ResourcesEdit Permission = "resources.edit"
 )
 
 type Target struct {
@@ -51,6 +54,7 @@ func permissions(scope domain.ModeratorScope) []Permission {
 		VerificationsReview,
 		ClassNoticesManage,
 		ClassSlotsManage,
+		ResourcesEdit,
 	}
 	if scope == domain.ModeratorScopeDepartment || scope == domain.ModeratorScopeUniversity {
 		result = append(result, ResourcesReview)

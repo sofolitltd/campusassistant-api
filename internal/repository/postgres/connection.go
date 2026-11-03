@@ -157,6 +157,7 @@ func RunMigrations(db *gorm.DB) error {
 		&domain.Verification{},
 		&domain.Resource{},
 		&domain.ResourceRating{},
+		&domain.ResourceAuthor{},
 		&domain.Transport{},
 		&domain.Attachment{},
 		&domain.Hall{},

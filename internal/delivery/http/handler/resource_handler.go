@@ -2,6 +2,7 @@ package handler
 
 import (
 	"campusassistant-api/internal/audit"
+	"campusassistant-api/internal/authz"
 	"campusassistant-api/internal/domain"
 	"campusassistant-api/internal/service"
 	"campusassistant-api/internal/usecase"
@@ -38,6 +39,12 @@ func NewResourceHandler(u usecase.Usecase[domain.Resource], s *storage.R2Storage
 		if !callerIsAdmin(c) {
 			filter["viewer_user_id"] = callerID(c)
 		}
+		// A teacher's or student's credited resources (profile lists).
+		for _, key := range []string{"author_teacher_id", "author_student_id"} {
+			if id, err := uuid.Parse(c.Query(key)); err == nil {
+				filter[key] = id
+			}
+		}
 	}
 	return &ResourceHandler{
 		GenericHandler:      generic,
@@ -55,6 +62,10 @@ func NewResourceHandler(u usecase.Usecase[domain.Resource], s *storage.R2Storage
 func (h *ResourceHandler) Create(c *gin.Context) {
 	var resource domain.Resource
 	if err := c.ShouldBindJSON(&resource); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := resource.Validate(); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -107,6 +118,50 @@ func (h *ResourceHandler) Create(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, resource)
+}
+
+// Update allows the uploader, admins and moderators in scope (department,
+// university, or a CR of one of its batches) — e.g. to correct its authors.
+func (h *ResourceHandler) Update(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID format"})
+		return
+	}
+	existing, err := h.Usecase.GetByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+		return
+	}
+	if !h.canEdit(c, existing) {
+		return
+	}
+	h.GenericHandler.Update(c)
+}
+
+// canEdit writes a 403 and returns false unless the caller may change r.
+func (h *ResourceHandler) canEdit(c *gin.Context, r *domain.Resource) bool {
+	if callerIsAdmin(c) || (r.CreatedByID != uuid.Nil && r.CreatedByID == callerID(c)) {
+		return true
+	}
+	ctx := c.Request.Context()
+	actor := actorFromContext(c)
+	targets := []authz.Target{{UniversityID: r.UniversityID, DepartmentID: r.DepartmentID}}
+	for _, b := range r.Batches {
+		targets = append(targets, authz.Target{BatchID: b.ID})
+	}
+	for _, t := range targets {
+		allowed, err := authz.Can(ctx, h.db, actor, authz.ResourcesEdit, t)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify moderator permissions"})
+			return false
+		}
+		if allowed {
+			return true
+		}
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "Only the uploader or a moderator can change this resource"})
+	return false
 }
 
 // notifyBatches sends a "new resource" notification to every claimed student
@@ -195,6 +250,13 @@ func (h *ResourceHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "Permanently deleted"})
 	} else {
 		before, _ := h.Usecase.GetByID(c.Request.Context(), id)
+		if before == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
+			return
+		}
+		if !h.canEdit(c, before) {
+			return
+		}
 		if err := h.Usecase.Delete(c.Request.Context(), id); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

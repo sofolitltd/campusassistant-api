@@ -66,11 +66,20 @@ func attachResourceCreators(ctx context.Context, db *gorm.DB, entities []domain.
 
 func (r *resourceRepository) Create(ctx context.Context, entity *domain.Resource) error {
 	batchIDs := entity.BatchIDs
+	authors := entity.Authors
 	entity.BatchIDs = nil
 	entity.Batches = nil
+	entity.Authors = nil
 
-	if err := r.db.WithContext(ctx).Create(entity).Error; err != nil {
+	if err := r.db.WithContext(ctx).Omit(clause.Associations).Create(entity).Error; err != nil {
 		return err
+	}
+	if authors != nil {
+		saved, err := replaceResourceAuthors(ctx, r.db, entity.ID, authors)
+		if err != nil {
+			return err
+		}
+		entity.Authors = saved
 	}
 
 	if len(batchIDs) > 0 {
@@ -88,8 +97,10 @@ func (r *resourceRepository) Create(ctx context.Context, entity *domain.Resource
 
 func (r *resourceRepository) Update(ctx context.Context, entity *domain.Resource) error {
 	batchIDs := entity.BatchIDs
+	authors := entity.Authors
 	entity.BatchIDs = nil
 	entity.Batches = nil
+	entity.Authors = nil
 
 	// Omit associations: Creator is filled on read, and saving it upserts the
 	// user row with created_by_id overwritten by this resource's ID.
@@ -109,6 +120,16 @@ func (r *resourceRepository) Update(ctx context.Context, entity *domain.Resource
 		}
 	}
 
+	if authors != nil {
+		saved, err := replaceResourceAuthors(ctx, r.db, entity.ID, authors)
+		if err != nil {
+			return err
+		}
+		entity.Authors = saved
+	} else if err := r.db.WithContext(ctx).Scopes(orderAuthors).Where("resource_id = ?", entity.ID).Find(&entity.Authors).Error; err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -121,6 +142,9 @@ func (r *resourceRepository) HardDelete(ctx context.Context, id uuid.UUID) error
 			return err
 		}
 		if err := tx.Where("resource_id = ?", id).Delete(&domain.ResourceRating{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("resource_id = ?", id).Delete(&domain.ResourceAuthor{}).Error; err != nil {
 			return err
 		}
 		return tx.Unscoped().Delete(&domain.Resource{}, "id = ?", id).Error
@@ -172,6 +196,14 @@ func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]inter
 		if dept, ok := filter["department_id"]; ok {
 			db = db.Where("LOWER(resources.course_code) IN ?", linkedCourseCodes(ctx, r.db, dept, code))
 			delete(filter, "course_code")
+		}
+	}
+
+	// Contributor lists: resources crediting a teacher or a student.
+	for key, column := range map[string]string{"author_teacher_id": "teacher_id", "author_student_id": "student_id"} {
+		if v, ok := filter[key]; ok {
+			db = db.Where("EXISTS (SELECT 1 FROM resource_authors ra WHERE ra.resource_id = resources.id AND ra."+column+" = ?)", v)
+			delete(filter, key)
 		}
 	}
 
@@ -236,7 +268,7 @@ func (r *resourceRepository) GetAll(ctx context.Context, filter map[string]inter
 		}
 	}
 	order.WithoutParentheses = true
-	err := db.Preload("Batches").
+	err := db.Preload("Batches").Preload("Authors", orderAuthors).
 		Order(clause.OrderBy{Expression: order}).
 		Limit(limit).Offset(offset).
 		Find(&entities).Error
@@ -255,7 +287,7 @@ func (r *resourceRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain
 	var entity domain.Resource
 	// Batches only — Creator is back-filled manually. Preload(clause.Associations)
 	// would also attempt the broken Creator association (nil result).
-	if err := r.db.WithContext(ctx).Preload("Batches").First(&entity, "id = ?", id).Error; err != nil {
+	if err := r.db.WithContext(ctx).Preload("Batches").Preload("Authors", orderAuthors).First(&entity, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
 

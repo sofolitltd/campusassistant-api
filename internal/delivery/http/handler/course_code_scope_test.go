@@ -26,7 +26,7 @@ func TestCourseCodeScopedByDepartment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&domain.Batch{}, &domain.Course{}, &domain.Chapter{}, &domain.Resource{}); err != nil {
+	if err := db.AutoMigrate(&domain.Batch{}, &domain.Course{}, &domain.Chapter{}, &domain.Resource{}, &domain.ResourceAuthor{}); err != nil {
 		t.Fatal(err)
 	}
 	uni, psy, edu := uuid.New(), uuid.New(), uuid.New()

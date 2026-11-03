@@ -365,6 +365,7 @@ func NewRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	{
 		rg.POST("", guard.Require(middleware.AuthJWT), resourceHandler.Create)
 		rg.GET("", guard.Require(middleware.AuthJWT), resourceHandler.GetAll)
+		rg.GET("/contributor", guard.Require(middleware.AuthJWT), resourceHandler.ContributorStats)
 		rg.GET("/:id", guard.Require(middleware.AuthJWT), resourceHandler.GetByID)
 		rg.PUT("/:id", guard.Require(middleware.AuthJWT), resourceHandler.Update)
 		rg.DELETE("/:id", guard.Require(middleware.AuthJWT), resourceHandler.Delete)

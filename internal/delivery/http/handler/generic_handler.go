@@ -37,6 +37,12 @@ func (h *GenericHandler[T]) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if v, ok := any(&entity).(interface{ Validate() error }); ok {
+		if err := v.Validate(); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
 
 	// Set Audit fields if supported and user_id exists
 	if auditable, ok := any(&entity).(domain.Auditable); ok {
@@ -198,9 +204,18 @@ func (h *GenericHandler[T]) Update(c *gin.Context) {
 	}
 
 	before := *existing
+	if r, ok := any(existing).(interface{ ResetForBind() }); ok {
+		r.ResetForBind()
+	}
 	if err := c.ShouldBindJSON(existing); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	if v, ok := any(existing).(interface{ Validate() error }); ok {
+		if err := v.Validate(); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	if auditable, ok := any(existing).(domain.Auditable); ok {
